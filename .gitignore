@@ -1,0 +1,13 @@
+node_modules/
+.next/
+.data/
+out/
+
+# Local Netlify folder
+.netlify
+
+# IDE
+.idea/
+
+# Env
+.env.local
