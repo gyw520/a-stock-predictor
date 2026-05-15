@@ -289,10 +289,12 @@ export function predict(klines: KLineData[]): PredictionResult {
   let volumeDetail = "";
   let volumeSignalText = "中性";
 
-  if (vol > volMA5 * 1.5 && klines[last].change > 0) {
+  const priceChange = last > 0 ? klines[last].close - klines[last - 1].close : klines[last].close - klines[last].open;
+
+  if (vol > volMA5 * 1.5 && priceChange > 0) {
     score += 8; volumeSignalText = "看涨"; volumeDetail = "放量上涨，资金积极入场";
     reasons.push("成交量明显放大且上涨，多头力量强");
-  } else if (vol > volMA5 * 1.5 && klines[last].change < 0) {
+  } else if (vol > volMA5 * 1.5 && priceChange < 0) {
     score -= 8; volumeSignalText = "看跌"; volumeDetail = "放量下跌，资金流出";
     reasons.push("放量下跌，抛压较大");
   } else if (vol < volMA5 * 0.7) {
