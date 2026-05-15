@@ -12,6 +12,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 import type { KLineData, EnrichedSectorData, NorthboundFlow } from "./stock-api";
 import { calcRawFactors, FACTOR_DEFS, type RawFactors } from "./quant-engine";
 
@@ -351,25 +352,16 @@ export function calcICWeightAdjustments(report: ICAnalysisReport): Map<string, I
 }
 
 // IC结果持久化
-const IC_FILE = path.join(process.cwd(), ".data", "ic-weights.json");
-
-export function saveICWeights(adjustments: Map<string, ICWeightAdjustment>, report: ICAnalysisReport) {
-  const dir = path.dirname(IC_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(IC_FILE, JSON.stringify({
+export async function saveICWeights(adjustments: Map<string, ICWeightAdjustment>, report: ICAnalysisReport): Promise<void> {
+  return kvSave("ic-weights", {
     timestamp: new Date().toISOString(),
     analyzedDays: report.analyzedDays,
     effectiveFactors: report.effectiveFactors,
     adjustments: Object.fromEntries(adjustments),
-  }, null, 2), "utf-8");
+  });
 }
 
-export function loadICWeights(): Map<string, ICWeightAdjustment> {
-  try {
-    if (fs.existsSync(IC_FILE)) {
-      const data = JSON.parse(fs.readFileSync(IC_FILE, "utf-8"));
-      return new Map(Object.entries(data.adjustments || {})) as Map<string, ICWeightAdjustment>;
-    }
-  } catch { /* ignore */ }
-  return new Map();
+export async function loadICWeights(): Promise<Map<string, ICWeightAdjustment>> {
+  const data = await kvLoad<{ adjustments: Record<string, ICWeightAdjustment> }>("ic-weights", { adjustments: {} });
+  return new Map(Object.entries(data.adjustments || {}));
 }

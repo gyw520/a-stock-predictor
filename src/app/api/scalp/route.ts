@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const state = loadScalpPortfolio();
+    const state = await loadScalpPortfolio();
 
     // 刷新持仓市价
     if (state.holdings.length > 0) {
@@ -58,7 +58,7 @@ export async function GET() {
 
 export async function PUT() {
   try {
-    const state = loadScalpPortfolio();
+    const state = await loadScalpPortfolio();
 
     // 获取行情
     const [stocks, nearLimitUp, breadth] = await Promise.all([
@@ -131,7 +131,7 @@ export async function PUT() {
       if (breadth.continuousLimitUp > 0) emotionData.highLimitCount = breadth.continuousLimitUp;
     }
 
-    const result = scalpScan(state, quotes, emotionData);
+    const result = await scalpScan(state, quotes, emotionData);
 
     // 通知
     if (result.actions.length > 0) {

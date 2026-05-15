@@ -8,6 +8,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 import type { QuantReport } from "./quant-engine";
 import { loadCurrentThresholds } from "./param-feedback";
 import { loadNextDayWatchlist } from "./limit-up-engine";
@@ -299,18 +300,7 @@ function daysBetween(d1: string, d2: string): number {
 //  持久化
 // ================================================================
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const STATE_FILE = path.join(DATA_DIR, "stock-portfolio.json");
-
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-export function loadStockPortfolio(): StockPortfolioState {
-  ensureDataDir();
-  if (fs.existsSync(STATE_FILE)) {
-    return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-  }
+function defaultStockPortfolioState(): StockPortfolioState {
   const now = new Date().toISOString().slice(0, 10);
   return {
     initialCapital: INITIAL_CAPITAL,
@@ -333,9 +323,12 @@ export function loadStockPortfolio(): StockPortfolioState {
   };
 }
 
-export function saveStockPortfolio(state: StockPortfolioState) {
-  ensureDataDir();
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
+export async function loadStockPortfolio(): Promise<StockPortfolioState> {
+  return kvLoad("stock-portfolio", defaultStockPortfolioState());
+}
+
+export async function saveStockPortfolio(state: StockPortfolioState): Promise<void> {
+  return kvSave("stock-portfolio", state);
 }
 
 // ================================================================
@@ -351,15 +344,15 @@ interface StockCandidate {
   tags: string[];
 }
 
-function getStockCandidates(
+async function getStockCandidates(
   report: QuantReport,
   quotes: StockQuoteInfo[],
   holdCodes: Set<string>,
-): { candidates: StockCandidate[]; topPicks: StockCandidate[] } {
+): Promise<{ candidates: StockCandidate[]; topPicks: StockCandidate[] }> {
   const quoteMap = new Map(quotes.map(q => [q.code, q]));
   const candidates: StockCandidate[] = [];
 
-  const thresholds = loadCurrentThresholds();
+  const thresholds = await loadCurrentThresholds();
   // 降低个股门槛：从30降到25，增加交易机会
   const minScore = Math.max(25, thresholds.buyScoreThreshold + 5);
 
@@ -408,11 +401,11 @@ function getStockCandidates(
 //  调仓核心
 // ================================================================
 
-export function stockRebalance(
+export async function stockRebalance(
   state: StockPortfolioState,
   quantReport: QuantReport,
   quotes: StockQuoteInfo[],
-): StockRebalanceResult {
+): Promise<StockRebalanceResult> {
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
   const actions: StockAction[] = [];
@@ -475,7 +468,7 @@ export function stockRebalance(
   state.riskLevel = riskLevel;
 
   // == Step 1: 止盈止损 ==
-  const thresholds = loadCurrentThresholds();
+  const thresholds = await loadCurrentThresholds();
   const adaptiveStopLoss = thresholds.stopLossPct || STOP_LOSS_PCT;
   const adaptiveTakeProfit = thresholds.takeProfitPct || TAKE_PROFIT_PCT;
 
@@ -534,7 +527,7 @@ export function stockRebalance(
 
   // == Step 2: 选股建仓 ==
   const holdCodes = new Set(state.holdings.map(h => h.code));
-  const { candidates, topPicks } = getStockCandidates(quantReport, quotes, holdCodes);
+  const { candidates, topPicks } = await getStockCandidates(quantReport, quotes, holdCodes);
 
   const slotsAvailable = MAX_HOLDINGS - state.holdings.length;
   const reserveCash = state.initialCapital * CASH_RESERVE_PCT;
@@ -677,11 +670,11 @@ export function stockRebalance(
 //  盘中扫描
 // ================================================================
 
-export function stockIntradayScan(
+export async function stockIntradayScan(
   state: StockPortfolioState,
   quotes: StockQuoteInfo[],
   quantReport?: QuantReport,
-): StockScanResult {
+): Promise<StockScanResult> {
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
   const actions: StockAction[] = [];
@@ -716,7 +709,7 @@ export function stockIntradayScan(
   }
 
   // == 风控止损（始终生效） ==
-  const thresholds = loadCurrentThresholds();
+  const thresholds = await loadCurrentThresholds();
   for (const h of [...state.holdings]) {
     if (!h.canSellToday) continue;
     const q = quoteMap.get(h.code);
@@ -776,7 +769,7 @@ export function stockIntradayScan(
   if (isAuctionWindow && state.holdings.length < MAX_HOLDINGS && state.cash > MIN_TRADE_AMOUNT * 1.5) {
     const todayAuctionBuys = state.trades.filter(t => t.date === today && t.reason.includes("极优板")).length;
     if (todayAuctionBuys === 0) {
-      const watchlist = loadNextDayWatchlist();
+      const watchlist = await loadNextDayWatchlist();
       if (watchlist && watchlist.picks) {
         const holdCodes = new Set(state.holdings.map(h => h.code));
         // 找极优板：qualityScore>=80 + limitUpToday + 仓位倍数>0

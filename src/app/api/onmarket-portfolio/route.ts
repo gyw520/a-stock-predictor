@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 // GET: 读取场内ETF组合状态
 export async function GET() {
   try {
-    const state = loadOnMarketPortfolio();
+    const state = await loadOnMarketPortfolio();
 
     // 用实时行情刷新持仓市值
     try {
@@ -63,7 +63,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}));
     const forceRebalance = body.force === true;
 
-    const state = loadOnMarketPortfolio();
+    const state = await loadOnMarketPortfolio();
     const today = new Date().toISOString().slice(0, 10);
 
     if (state.lastRebalanceDate === today && !forceRebalance) {
@@ -111,7 +111,7 @@ export async function POST(request: Request) {
       if (kl && kl.length >= 20) turnovers.set(etf.code, calcTurnoverTrend(kl, etf.code));
     }
 
-    const icWeights = loadICWeights();
+    const icWeights = await loadICWeights();
     const quantReport = generateQuantReport(
       targets, northbound, marketChange,
       eventAnalysis.sectorSummaries, eventAnalysis.topEvents,
@@ -128,7 +128,7 @@ export async function POST(request: Request) {
       changePercent: etf.changePercent,
     }));
 
-    const result = onMarketRebalance(state, quantReport, quotes);
+    const result = await onMarketRebalance(state, quantReport, quotes);
 
     // 有操作时推送通知
     if (result.actions.length > 0) {
@@ -161,7 +161,7 @@ const FULL_SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5分钟
 
 export async function PUT() {
   try {
-    const state = loadOnMarketPortfolio();
+    const state = await loadOnMarketPortfolio();
     const hasHoldings = state.holdings.length > 0;
     const hasPending = (state.pendingTOrders || []).length > 0;
     const hasCapacity = state.holdings.length < 2 && state.cash > 2500;
@@ -242,7 +242,7 @@ export async function PUT() {
           if (kl && kl.length >= 20) turnovers.set(etf.code, calcTurnoverTrend(kl, etf.code));
         }
 
-        const icWeights = loadICWeights();
+        const icWeights = await loadICWeights();
         quantReport = generateQuantReport(
           targets, northbound, marketChange,
           eventAnalysis.sectorSummaries, eventAnalysis.topEvents,
@@ -256,7 +256,7 @@ export async function PUT() {
       }
     }
 
-    const result = intradayScan(state, quotes, quantReport);
+    const result = await intradayScan(state, quotes, quantReport);
 
     // 有操作时推送通知（盘中买入/止损/做T）
     if (result.triggered && result.actions.length > 0) {

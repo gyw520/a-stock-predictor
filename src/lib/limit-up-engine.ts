@@ -17,6 +17,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 
 export interface LimitUpCandidate {
   code: string;
@@ -410,24 +411,12 @@ interface KLineSimple {
   high: number; low: number; volume: number; amount: number;
 }
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const WATCHLIST_FILE = path.join(DATA_DIR, "next-day-watchlist.json");
-
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+export async function loadNextDayWatchlist(): Promise<NextDayWatchlist | null> {
+  return kvLoad<NextDayWatchlist | null>("next-day-watchlist", null);
 }
 
-export function loadNextDayWatchlist(): NextDayWatchlist | null {
-  ensureDataDir();
-  if (!fs.existsSync(WATCHLIST_FILE)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(WATCHLIST_FILE, "utf-8"));
-  } catch { return null; }
-}
-
-export function saveNextDayWatchlist(wl: NextDayWatchlist) {
-  ensureDataDir();
-  fs.writeFileSync(WATCHLIST_FILE, JSON.stringify(wl, null, 2), "utf-8");
+export async function saveNextDayWatchlist(wl: NextDayWatchlist): Promise<void> {
+  return kvSave("next-day-watchlist", wl);
 }
 
 /**

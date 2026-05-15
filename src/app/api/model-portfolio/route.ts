@@ -18,7 +18,7 @@ export const dynamic = "force-dynamic";
 // GET: 读取当前组合状态
 export async function GET() {
   try {
-    const state = loadPortfolio();
+    const state = await loadPortfolio();
     // 尝试用最新行情刷新持仓市值
     try {
       const otcFunds = await fetchOTCFundList();
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}));
     const forceRebalance = body.force === true;
 
-    const state = loadPortfolio();
+    const state = await loadPortfolio();
     const today = new Date().toISOString().slice(0, 10);
 
     // 防止同一天重复调仓（除非强制）
@@ -120,18 +120,18 @@ export async function POST(request: Request) {
     }
 
     // 先算因子趋势（用昨日快照对比）
-    const icWeights = loadICWeights();
+    const icWeights = await loadICWeights();
     let prevDeltas: Map<string, import("@/lib/factor-memory").FactorDelta> | undefined;
     try {
       const tempReport = generateQuantReport(targets, northbound, marketChange, eventAnalysis.sectorSummaries, eventAnalysis.topEvents, { breadth, margin, valuations, turnovers }, undefined, icWeights);
-      const mem = calcFactorDeltas(tempReport.decisions);
+      const mem = await calcFactorDeltas(tempReport.decisions);
       if (mem.historyDays >= 2) prevDeltas = new Map(mem.deltas.map(d => [d.code, d]));
     } catch {}
 
     const quantReport = generateQuantReport(targets, northbound, marketChange, eventAnalysis.sectorSummaries, eventAnalysis.topEvents, { breadth, margin, valuations, turnovers }, prevDeltas, icWeights);
 
     // 记录因子快照
-    try { recordFactorSnapshot(quantReport.decisions); } catch {}
+    try { await recordFactorSnapshot(quantReport.decisions); } catch {}
 
     // 场外ETF报价
     const otcQuotes = otcFunds.map(otc => ({

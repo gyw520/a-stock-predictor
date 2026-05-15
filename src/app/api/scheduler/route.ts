@@ -77,7 +77,7 @@ async function handleDailyReport() {
   }
 
   // 组合状态
-  const state = loadPortfolio();
+  const state = await loadPortfolio();
   const totalValue = state.cash + state.holdings.reduce((s, h) => s + h.currentValue, 0);
   const totalPnlPct = ((totalValue - state.initialCapital) / state.initialCapital * 100).toFixed(2);
 
@@ -162,7 +162,7 @@ async function handleScalpScan() {
 // ================================================================
 
 async function handleAlertPush() {
-  const unacked = getUnacknowledgedAlerts();
+  const unacked = await getUnacknowledgedAlerts();
 
   if (unacked.length > 0) {
     const content = unacked.map(a =>

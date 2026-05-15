@@ -292,7 +292,7 @@ export async function POST() {
         else if (p.score >= 55) p.level = "高";
         else p.level = "中";
       }
-      saveNextDayWatchlist(watchlist);
+      await saveNextDayWatchlist(watchlist);
       notifyNextDayWatchlist(watchlist);
     }
 
@@ -326,7 +326,7 @@ export async function PUT() {
     const isIntraday = isWeekday && ((mins >= 570 && mins <= 690) || (mins >= 780 && mins <= 900));
     const phase: "callAuction" | "intraday" = isCallAuction ? "callAuction" : "intraday";
 
-    const watchlist = loadNextDayWatchlist();
+    const watchlist = await loadNextDayWatchlist();
     if (!watchlist || watchlist.picks.length === 0) {
       return NextResponse.json({ triggered: false, alerts: [], phase, reasoning: "无关注列表" });
     }
@@ -517,7 +517,7 @@ export async function PATCH() {
     const topLosers = sorted.slice(-10).reverse();
 
     // 昨日关注票今日竞价表现
-    const watchlist = loadNextDayWatchlist();
+    const watchlist = await loadNextDayWatchlist();
     const watchlistAuction: AuctionStats["watchlistAuction"] = (watchlist?.picks || []).map(p => {
       const m = allMap.get(p.code);
       return {

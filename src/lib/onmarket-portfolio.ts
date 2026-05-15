@@ -14,6 +14,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 import type { QuantDecision, QuantReport } from "./quant-engine";
 import { loadCurrentThresholds } from "./param-feedback";
 
@@ -192,20 +193,7 @@ function calcBuyShares(cash: number, price: number): number {
 //  持久化
 // ================================================================
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const STATE_FILE = path.join(DATA_DIR, "onmarket-portfolio.json");
-
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-export function loadOnMarketPortfolio(): OnMarketState {
-  ensureDataDir();
-  if (fs.existsSync(STATE_FILE)) {
-    try {
-      return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-    } catch { /* fall through */ }
-  }
+function defaultOnMarketState(): OnMarketState {
   const now = new Date().toISOString().slice(0, 10);
   return {
     initialCapital: INITIAL_CAPITAL,
@@ -228,9 +216,12 @@ export function loadOnMarketPortfolio(): OnMarketState {
   };
 }
 
-export function saveOnMarketPortfolio(state: OnMarketState) {
-  ensureDataDir();
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
+export async function loadOnMarketPortfolio(): Promise<OnMarketState> {
+  return kvLoad("onmarket-portfolio", defaultOnMarketState());
+}
+
+export async function saveOnMarketPortfolio(state: OnMarketState): Promise<void> {
+  return kvSave("onmarket-portfolio", state);
 }
 
 // ================================================================
@@ -254,11 +245,11 @@ export interface OnMarketQuote {
 //  核心调仓
 // ================================================================
 
-export function onMarketRebalance(
+export async function onMarketRebalance(
   state: OnMarketState,
   quantReport: QuantReport,
   quotes: OnMarketQuote[],
-): OnMarketRebalanceResult {
+): Promise<OnMarketRebalanceResult> {
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
   const actions: OnMarketAction[] = [];
@@ -385,7 +376,7 @@ export function onMarketRebalance(
   const weekPnlPct = state.weekStartValue > 0 ? ((totalValue - state.weekStartValue) / state.weekStartValue) * 100 : 0;
 
   // -- Step 1: 止损/止盈（仅限T+1可卖标的，自适应参数） --
-  const adaptiveThresholds = loadCurrentThresholds();
+  const adaptiveThresholds = await loadCurrentThresholds();
   const adaptiveStopLoss = -(adaptiveThresholds.stopLossPct);
   const adaptiveTakeProfit = adaptiveThresholds.takeProfitPct;
   const toSell: string[] = [];
@@ -474,7 +465,7 @@ export function onMarketRebalance(
   // -- Step 3: 选股建仓 --
   const holdCodes = new Set(state.holdings.map(h => h.code));
   const holdSectors = new Set(state.holdings.map(h => h.sector));
-  const candidates = getOnMarketCandidates(quantReport, quotes, holdCodes, weekPnlPct, holdSectors);
+  const candidates = await getOnMarketCandidates(quantReport, quotes, holdCodes, weekPnlPct, holdSectors);
 
   const slotsAvailable = MAX_HOLDINGS - state.holdings.length;
   // 留30%现金作为补仓弹药
@@ -605,18 +596,18 @@ interface OnMarketCandidate {
   tags: string[];
 }
 
-function getOnMarketCandidates(
+async function getOnMarketCandidates(
   report: QuantReport,
   quotes: OnMarketQuote[],
   holdCodes: Set<string>,
   weekPnlPct: number,
   holdSectors: Set<string>,
-): OnMarketCandidate[] {
+): Promise<OnMarketCandidate[]> {
   const quoteMap = new Map(quotes.map(q => [q.code, q]));
   const candidates: OnMarketCandidate[] = [];
 
   // 自适应参数：从Walk-Forward反馈中加载
-  const thresholds = loadCurrentThresholds();
+  const thresholds = await loadCurrentThresholds();
   const adaptiveBuyThreshold = thresholds.buyScoreThreshold;
 
   for (const d of report.decisions) {
@@ -782,11 +773,11 @@ function updateTStats(state: OnMarketState, profit: number, date: string) {
   }
 }
 
-export function intradayScan(
+export async function intradayScan(
   state: OnMarketState,
   quotes: OnMarketQuote[],
   quantReport?: QuantReport,
-): IntradayScanResult {
+): Promise<IntradayScanResult> {
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
   const actions: OnMarketAction[] = [];
@@ -1169,7 +1160,7 @@ export function intradayScan(
 
     if (todayIntradayBuys < INTRADAY_MAX_BUY_PER_DAY) {
       // 找高分机会
-      const adaptiveThresholds = loadCurrentThresholds();
+      const adaptiveThresholds = await loadCurrentThresholds();
       const intradayThreshold = Math.max(INTRADAY_BUY_THRESHOLD, adaptiveThresholds.buyScoreThreshold + 8);
 
       const opportunities = quantReport.decisions

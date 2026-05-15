@@ -22,6 +22,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 import { loadNextDayWatchlist } from "./limit-up-engine";
 import type { LimitUpQuality } from "./limitup-quality";
 
@@ -198,18 +199,7 @@ const CASH_RESERVE = 500;        // 留500元缓冲
 //  持久化
 // ================================================================
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const SCALP_FILE = path.join(DATA_DIR, "scalp-portfolio.json");
-
-function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-export function loadScalpPortfolio(): ScalpState {
-  ensureDir();
-  if (fs.existsSync(SCALP_FILE)) {
-    try { return JSON.parse(fs.readFileSync(SCALP_FILE, "utf-8")); } catch {}
-  }
+function defaultScalpState(): ScalpState {
   const now = new Date().toISOString();
   return {
     initialCapital: INITIAL_CAPITAL,
@@ -231,9 +221,12 @@ export function loadScalpPortfolio(): ScalpState {
   };
 }
 
-function saveScalpPortfolio(state: ScalpState) {
-  ensureDir();
-  fs.writeFileSync(SCALP_FILE, JSON.stringify(state, null, 2), "utf-8");
+export async function loadScalpPortfolio(): Promise<ScalpState> {
+  return kvLoad("scalp-portfolio", defaultScalpState());
+}
+
+async function saveScalpPortfolio(state: ScalpState): Promise<void> {
+  return kvSave("scalp-portfolio", state);
 }
 
 // ================================================================
@@ -375,11 +368,11 @@ function getEmotionStrategy(emotion: MarketEmotion): {
 //  超短线盘中扫描（核心）
 // ================================================================
 
-export function scalpScan(
+export async function scalpScan(
   state: ScalpState,
   quotes: ScalpQuote[],
   emotionData?: MarketEmotionData,
-): ScalpScanResult {
+): Promise<ScalpScanResult> {
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
   const bjNow = new Date(Date.now() + 8 * 3600000);
@@ -572,7 +565,7 @@ export function scalpScan(
 
       // ====== 策略A：极优板竞价买入（9:25-9:40）======
       if (!bought && minutesInDay >= 565 && minutesInDay <= 580) {
-        bought = tryAuctionBuy(state, quoteMap, today, now, actions, reasoning, emoStrategy.positionScale);
+        bought = await tryAuctionBuy(state, quoteMap, today, now, actions, reasoning, emoStrategy.positionScale);
         if (bought) changed = true;
       }
 
@@ -584,7 +577,7 @@ export function scalpScan(
 
       // ====== 策略C：龙头低吸（10:30-14:00，龙头回调买入）======
       if (!bought && minutesInDay >= 630 && minutesInDay <= 840 && (emotion === "冰点" || emotion === "回暖")) {
-        bought = tryLeaderDipBuy(state, quotes, today, now, actions, reasoning, emoStrategy.positionScale);
+        bought = await tryLeaderDipBuy(state, quotes, today, now, actions, reasoning, emoStrategy.positionScale);
         if (bought) changed = true;
       }
     }
@@ -608,7 +601,7 @@ export function scalpScan(
 //  策略A：极优板竞价买入
 // ================================================================
 
-function tryAuctionBuy(
+async function tryAuctionBuy(
   state: ScalpState,
   quoteMap: Map<string, ScalpQuote>,
   today: string,
@@ -616,8 +609,8 @@ function tryAuctionBuy(
   actions: ScalpAction[],
   reasoning: string[],
   positionScale: number,
-): boolean {
-  const watchlist = loadNextDayWatchlist();
+): Promise<boolean> {
+  const watchlist = await loadNextDayWatchlist();
   if (!watchlist || !watchlist.picks) return false;
 
   const holdCodes = new Set(state.holdings.map(h => h.code));
@@ -713,7 +706,7 @@ function tryFirstBoardBuy(
 //  策略C：龙头低吸
 // ================================================================
 
-function tryLeaderDipBuy(
+async function tryLeaderDipBuy(
   state: ScalpState,
   quotes: ScalpQuote[],
   today: string,
@@ -721,8 +714,8 @@ function tryLeaderDipBuy(
   actions: ScalpAction[],
   reasoning: string[],
   positionScale: number,
-): boolean {
-  const watchlist = loadNextDayWatchlist();
+): Promise<boolean> {
+  const watchlist = await loadNextDayWatchlist();
   if (!watchlist || !watchlist.picks) return false;
 
   const holdCodes = new Set(state.holdings.map(h => h.code));

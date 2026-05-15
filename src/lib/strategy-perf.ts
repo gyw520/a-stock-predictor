@@ -11,6 +11,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 import type { StrategyName, MarketRegime } from "./quant-engine";
 
 // ================================================================
@@ -50,24 +51,15 @@ export interface StrategyPerfState {
 //  持久化
 // ================================================================
 
-const PERF_FILE = path.join(process.cwd(), ".data", "strategy-perf.json");
-const MAX_RECORDS = 500; // 保留最近500条记录
+const MAX_RECORDS = 500;
 
-function loadPerfState(): StrategyPerfState {
-  try {
-    if (fs.existsSync(PERF_FILE)) {
-      return JSON.parse(fs.readFileSync(PERF_FILE, "utf-8"));
-    }
-  } catch { /* ignore */ }
-  return { records: [], lastUpdateDate: "" };
+async function loadPerfState(): Promise<StrategyPerfState> {
+  return kvLoad("strategy-perf", { records: [], lastUpdateDate: "" } as StrategyPerfState);
 }
 
-function savePerfState(state: StrategyPerfState) {
-  const dir = path.dirname(PERF_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  // 保留最近MAX_RECORDS条
+async function savePerfState(state: StrategyPerfState): Promise<void> {
   state.records = state.records.slice(-MAX_RECORDS);
-  fs.writeFileSync(PERF_FILE, JSON.stringify(state, null, 2), "utf-8");
+  return kvSave("strategy-perf", state);
 }
 
 // ================================================================
@@ -77,12 +69,12 @@ function savePerfState(state: StrategyPerfState) {
 /**
  * 记录今日各策略信号（每日调仓后调用）
  */
-export function recordStrategySignals(
+export async function recordStrategySignals(
   signals: { code: string; strategy: StrategyName; direction: "long" | "short" | "neutral"; strength: number }[],
   regime: MarketRegime,
   date: string,
 ) {
-  const state = loadPerfState();
+  const state = await loadPerfState();
 
   // 避免同日重复记录
   if (state.lastUpdateDate === date) return;
@@ -100,16 +92,16 @@ export function recordStrategySignals(
   }
 
   state.lastUpdateDate = date;
-  savePerfState(state);
+  await savePerfState(state);
 }
 
 /**
  * 用实际收益验证过去未验证的信号（每日开盘后调用）
  */
-export function verifyStrategySignals(
+export async function verifyStrategySignals(
   returns: Map<string, { ret1d: number; ret3d: number }>, // code -> 实际收益
 ) {
-  const state = loadPerfState();
+  const state = await loadPerfState();
   let updated = false;
 
   for (const rec of state.records) {
@@ -128,7 +120,7 @@ export function verifyStrategySignals(
     updated = true;
   }
 
-  if (updated) savePerfState(state);
+  if (updated) await savePerfState(state);
 }
 
 // ================================================================
@@ -138,8 +130,8 @@ export function verifyStrategySignals(
 /**
  * 计算各策略在各regime下的动态权重乘数
  */
-export function calcStrategyWeightAdj(): Map<string, number> {
-  const state = loadPerfState();
+export async function calcStrategyWeightAdj(): Promise<Map<string, number>> {
+  const state = await loadPerfState();
   const verified = state.records.filter(r => r.correct !== undefined);
   if (verified.length < 10) return new Map(); // 数据不足
 
@@ -182,8 +174,8 @@ export function calcStrategyWeightAdj(): Map<string, number> {
 /**
  * 获取格式化的策略绩效报告
  */
-export function getStrategyPerfReport(): StrategyPerfSummary[] {
-  const state = loadPerfState();
+export async function getStrategyPerfReport(): Promise<StrategyPerfSummary[]> {
+  const state = await loadPerfState();
   const verified = state.records.filter(r => r.correct !== undefined);
   if (verified.length < 5) return [];
 

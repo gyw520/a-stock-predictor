@@ -13,6 +13,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 import type { QuantDecision, QuantReport, MarketRegime } from "./quant-engine";
 
 // ================================================================
@@ -106,21 +107,7 @@ export interface RebalanceAction {
 //  持久化
 // ================================================================
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const STATE_FILE = path.join(DATA_DIR, "model-portfolio.json");
-
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-export function loadPortfolio(): PortfolioState {
-  ensureDataDir();
-  if (fs.existsSync(STATE_FILE)) {
-    try {
-      return JSON.parse(fs.readFileSync(STATE_FILE, "utf-8"));
-    } catch { /* fall through */ }
-  }
-  // 初始状态
+function defaultPortfolioState(): PortfolioState {
   const now = new Date().toISOString().slice(0, 10);
   return {
     initialCapital: 10000,
@@ -140,9 +127,12 @@ export function loadPortfolio(): PortfolioState {
   };
 }
 
-export function savePortfolio(state: PortfolioState) {
-  ensureDataDir();
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
+export async function loadPortfolio(): Promise<PortfolioState> {
+  return kvLoad("model-portfolio", defaultPortfolioState());
+}
+
+export async function savePortfolio(state: PortfolioState): Promise<void> {
+  return kvSave("model-portfolio", state);
 }
 
 // ================================================================

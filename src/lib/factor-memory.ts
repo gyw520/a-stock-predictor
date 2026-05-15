@@ -12,6 +12,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 import type { QuantDecision, FactorCategory } from "./quant-engine";
 
 // ================================================================
@@ -67,36 +68,24 @@ export interface FactorMemoryReport {
 //  持久化
 // ================================================================
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const SNAPSHOT_FILE = path.join(DATA_DIR, "factor-snapshots.json");
 const MAX_HISTORY_DAYS = 30;
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+async function loadSnapshots(): Promise<Record<string, Array<FactorSnapshot>>> {
+  const empty: Record<string, Array<FactorSnapshot>> = {};
+  return kvLoad("factor-snapshots", empty);
 }
 
-function loadSnapshots(): Record<string, FactorSnapshot[]> {
-  ensureDataDir();
-  if (fs.existsSync(SNAPSHOT_FILE)) {
-    try {
-      return JSON.parse(fs.readFileSync(SNAPSHOT_FILE, "utf-8"));
-    } catch { /* fall through */ }
-  }
-  return {};
-}
-
-function saveSnapshots(data: Record<string, FactorSnapshot[]>) {
-  ensureDataDir();
-  fs.writeFileSync(SNAPSHOT_FILE, JSON.stringify(data, null, 2), "utf-8");
+async function saveSnapshots(data: Record<string, FactorSnapshot[]>): Promise<void> {
+  return kvSave("factor-snapshots", data);
 }
 
 // ================================================================
 //  快照记录
 // ================================================================
 
-export function recordFactorSnapshot(decisions: QuantDecision[], date?: string): void {
+export async function recordFactorSnapshot(decisions: QuantDecision[], date?: string): Promise<void> {
   const today = date || new Date().toISOString().slice(0, 10);
-  const allSnapshots = loadSnapshots();
+  const allSnapshots = await loadSnapshots();
 
   for (const d of decisions) {
     if (!allSnapshots[d.code]) allSnapshots[d.code] = [];
@@ -115,7 +104,7 @@ export function recordFactorSnapshot(decisions: QuantDecision[], date?: string):
     }
   }
 
-  saveSnapshots(allSnapshots);
+  await saveSnapshots(allSnapshots);
 }
 
 function buildSnapshot(d: QuantDecision, date: string): FactorSnapshot {
@@ -141,9 +130,9 @@ function buildSnapshot(d: QuantDecision, date: string): FactorSnapshot {
 //  因子变化率 + 加速度计算
 // ================================================================
 
-export function calcFactorDeltas(decisions: QuantDecision[]): FactorMemoryReport {
+export async function calcFactorDeltas(decisions: QuantDecision[]): Promise<FactorMemoryReport> {
   const today = new Date().toISOString().slice(0, 10);
-  const allSnapshots = loadSnapshots();
+  const allSnapshots = await loadSnapshots();
   const deltas: FactorDelta[] = [];
 
   for (const d of decisions) {
@@ -246,13 +235,14 @@ function classifyTrend(delta: number, accel: number, trendDays: number): FactorT
 //  查询历史
 // ================================================================
 
-export function getFactorHistory(code: string, days = 10): FactorSnapshot[] {
-  const allSnapshots = loadSnapshots();
+export async function getFactorHistory(code: string, days = 10): Promise<FactorSnapshot[]> {
+  const allSnapshots = await loadSnapshots();
   return (allSnapshots[code] || []).slice(-days);
 }
 
-export function getScoreHistory(code: string, days = 10): { date: string; score: number }[] {
-  return getFactorHistory(code, days).map(s => ({ date: s.date, score: s.finalScore }));
+export async function getScoreHistory(code: string, days = 10): Promise<{ date: string; score: number }[]> {
+  const history = await getFactorHistory(code, days);
+  return history.map(s => ({ date: s.date, score: s.finalScore }));
 }
 
 // ================================================================

@@ -10,6 +10,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 import { loadPortfolio, type PortfolioHolding } from "./model-portfolio";
 
 // ================================================================
@@ -57,28 +58,13 @@ export interface HoldingLiveStatus {
 //  持久化
 // ================================================================
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const ALERTS_FILE = path.join(DATA_DIR, "alerts.json");
-
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+export async function loadAlerts(): Promise<Alert[]> {
+  return kvLoad<Alert[]>("alerts", []);
 }
 
-export function loadAlerts(): Alert[] {
-  ensureDataDir();
-  if (fs.existsSync(ALERTS_FILE)) {
-    try {
-      return JSON.parse(fs.readFileSync(ALERTS_FILE, "utf-8"));
-    } catch { /* fall through */ }
-  }
-  return [];
-}
-
-function saveAlerts(alerts: Alert[]) {
-  ensureDataDir();
-  // 只保留最近100条
+async function saveAlerts(alerts: Alert[]): Promise<void> {
   const trimmed = alerts.slice(-100);
-  fs.writeFileSync(ALERTS_FILE, JSON.stringify(trimmed, null, 2), "utf-8");
+  return kvSave("alerts", trimmed);
 }
 
 // ================================================================
@@ -97,10 +83,10 @@ interface LivePrice {
 /**
  * 执行一次监控扫描
  */
-export function runMonitorScan(
+export async function runMonitorScan(
   livePrices: Map<string, LivePrice>,
   quantScores?: Map<string, number>,
-): MonitorResult {
+): Promise<MonitorResult> {
   const now = new Date();
   const timestamp = now.toISOString();
   const hour = now.getHours();
@@ -112,8 +98,8 @@ export function runMonitorScan(
      (hour === 11 && minute <= 30) ||
      (hour >= 13 && hour < 15));
 
-  const state = loadPortfolio();
-  const existingAlerts = loadAlerts();
+  const state = await loadPortfolio();
+  const existingAlerts = await loadAlerts();
   const newAlerts: Alert[] = [];
   const holdingStatus: HoldingLiveStatus[] = [];
 
@@ -214,7 +200,7 @@ export function runMonitorScan(
 
   // 保存新告警
   if (newAlerts.length > 0) {
-    saveAlerts([...existingAlerts, ...newAlerts]);
+    await saveAlerts([...existingAlerts, ...newAlerts]);
   }
 
   return { timestamp, isTradingHours, alerts: newAlerts, holdingStatus };
@@ -224,19 +210,19 @@ export function runMonitorScan(
 //  告警确认
 // ================================================================
 
-export function acknowledgeAlert(alertId: string): boolean {
-  const alerts = loadAlerts();
+export async function acknowledgeAlert(alertId: string): Promise<boolean> {
+  const alerts = await loadAlerts();
   const alert = alerts.find(a => a.id === alertId);
   if (alert) {
     alert.acknowledged = true;
-    saveAlerts(alerts);
+    await saveAlerts(alerts);
     return true;
   }
   return false;
 }
 
-export function getUnacknowledgedAlerts(): Alert[] {
-  return loadAlerts().filter(a => !a.acknowledged);
+export async function getUnacknowledgedAlerts(): Promise<Alert[]> {
+  return (await loadAlerts()).filter(a => !a.acknowledged);
 }
 
 // ================================================================

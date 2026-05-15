@@ -10,8 +10,7 @@
  * 持久化到 .data/param-feedback.json
  */
 
-import * as fs from "fs";
-import * as path from "path";
+import { kvLoad, kvSave } from "./kv-store";
 import type { BacktestConfig, WalkForwardResult } from "./backtest";
 
 // ================================================================
@@ -62,7 +61,6 @@ const DEFAULT_THRESHOLDS: EngineThresholds = {
   positionSizeMultiplier: 1.1,    // 提高仓位系数→更积极
 };
 
-const FEEDBACK_FILE = path.join(process.cwd(), ".data", "param-feedback.json");
 const MAX_CHANGE_PCT = 30; // 单次调整最大幅度30%
 
 // ================================================================
@@ -72,7 +70,7 @@ const MAX_CHANGE_PCT = 30; // 单次调整最大幅度30%
 /**
  * 从Walk-Forward结果生成参数反馈
  */
-export function generateParamFeedback(wfResult: WalkForwardResult): ParamFeedback | null {
+export async function generateParamFeedback(wfResult: WalkForwardResult): Promise<ParamFeedback | null> {
   if (wfResult.windows.length < 2) return null;
 
   const { robustParams, avgOverfitRatio, paramStability } = wfResult;
@@ -93,7 +91,8 @@ export function generateParamFeedback(wfResult: WalkForwardResult): ParamFeedbac
   if (confidence < 30) return null;
 
   // 映射到引擎阈值（带安全限制）
-  const adjustedParams = mapToEngineThresholds(robustParams, confidence);
+  const current = await loadCurrentThresholds();
+  const adjustedParams = mapToEngineThresholds(robustParams, confidence, current);
 
   const feedback: ParamFeedback = {
     timestamp: new Date().toISOString(),
@@ -112,9 +111,7 @@ export function generateParamFeedback(wfResult: WalkForwardResult): ParamFeedbac
 /**
  * 将回测最优参数映射到引擎阈值，带安全边界
  */
-function mapToEngineThresholds(params: Partial<BacktestConfig>, confidence: number): EngineThresholds {
-  const current = loadCurrentThresholds();
-
+function mapToEngineThresholds(params: Partial<BacktestConfig>, confidence: number, current: EngineThresholds): EngineThresholds {
   // 调整力度与可信度正相关：高可信度→调整幅度更大
   const adjustFactor = Math.min(1, confidence / 80); // 可信度80时完全采纳
 
@@ -162,11 +159,11 @@ function safeAdjust(current: number, target: number, factor: number): number {
 /**
  * 生成人可读的调整建议列表
  */
-export function getParamAdjustments(wfResult: WalkForwardResult): ParamAdjustment[] {
-  const feedback = generateParamFeedback(wfResult);
+export async function getParamAdjustments(wfResult: WalkForwardResult): Promise<ParamAdjustment[]> {
+  const feedback = await generateParamFeedback(wfResult);
   if (!feedback) return [];
 
-  const current = loadCurrentThresholds();
+  const current = await loadCurrentThresholds();
   const suggested = feedback.adjustedParams;
   const adjustments: ParamAdjustment[] = [];
 
@@ -222,33 +219,29 @@ function getAdjustReason(param: string, cur: number, sug: number, wf: WalkForwar
 //  持久化
 // ================================================================
 
-export function loadCurrentThresholds(): EngineThresholds {
-  try {
-    if (fs.existsSync(FEEDBACK_FILE)) {
-      const data: ParamFeedback = JSON.parse(fs.readFileSync(FEEDBACK_FILE, "utf-8"));
-      return data.adjustedParams;
-    }
-  } catch { /* ignore */ }
+export async function loadCurrentThresholds(): Promise<EngineThresholds> {
+  const data = await kvLoad<ParamFeedback | null>("param-feedback", null);
+  if (data && data.adjustedParams) {
+    return data.adjustedParams;
+  }
   return { ...DEFAULT_THRESHOLDS };
 }
 
-export function saveParamFeedback(feedback: ParamFeedback) {
-  const dir = path.dirname(FEEDBACK_FILE);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(FEEDBACK_FILE, JSON.stringify(feedback, null, 2), "utf-8");
+export async function saveParamFeedback(feedback: ParamFeedback): Promise<void> {
+  return kvSave("param-feedback", feedback);
 }
 
 /**
  * 一键执行：从WF结果生成反馈并持久化
  * 返回调整详情供前端展示
  */
-export function applyWalkForwardFeedback(wfResult: WalkForwardResult): {
+export async function applyWalkForwardFeedback(wfResult: WalkForwardResult): Promise<{
   applied: boolean;
   feedback: ParamFeedback | null;
   adjustments: ParamAdjustment[];
-} {
-  const feedback = generateParamFeedback(wfResult);
-  const adjustments = getParamAdjustments(wfResult);
+}> {
+  const feedback = await generateParamFeedback(wfResult);
+  const adjustments = await getParamAdjustments(wfResult);
 
   if (feedback && feedback.confidence >= 40) {
     saveParamFeedback(feedback);

@@ -72,7 +72,7 @@ export async function GET() {
     }).filter(t => t.klines.length >= 20);
 
     // 加载IC自适应权重
-    const icWeights = loadICWeights();
+    const icWeights = await loadICWeights();
 
     // 先用昨日快照计算因子趋势（反哺决策）
     let prevDeltas: Map<string, import("@/lib/factor-memory").FactorDelta> | undefined;
@@ -83,14 +83,14 @@ export async function GET() {
         { breadth, margin, valuations, turnovers },
         undefined, icWeights,
       );
-      const memoryReport = calcFactorDeltas(tempReport.decisions);
+      const memoryReport = await calcFactorDeltas(tempReport.decisions);
       if (memoryReport.historyDays >= 2) {
         prevDeltas = new Map(memoryReport.deltas.map(d => [d.code, d]));
       }
     } catch {}
 
     // 策略绩效自评估权重
-    const strategyPerfAdj = calcStrategyWeightAdj();
+    const strategyPerfAdj = await calcStrategyWeightAdj();
 
     // 正式生成报告（带因子趋势+IC权重+策略自评）
     const report = generateQuantReport(
@@ -102,7 +102,7 @@ export async function GET() {
 
     // 记录今日快照
     try {
-      recordFactorSnapshot(report.decisions);
+      await recordFactorSnapshot(report.decisions);
     } catch (e) { console.error("Factor snapshot save error:", e); }
 
     // 记录策略信号用于绩效跟踪
@@ -117,7 +117,7 @@ export async function GET() {
     // 计算最终的factorMemory返回前端
     let factorMemory = null;
     try {
-      factorMemory = calcFactorDeltas(report.decisions);
+      factorMemory = await calcFactorDeltas(report.decisions);
     } catch (e) { console.error("Factor delta calc error:", e); }
 
     return NextResponse.json({ ...report, factorMemory });

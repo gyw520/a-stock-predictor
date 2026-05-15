@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
  */
 export async function GET() {
   try {
-    const state = loadPortfolio();
+    const state = await loadPortfolio();
 
     if (state.holdings.length === 0) {
       return NextResponse.json({

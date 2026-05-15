@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const state = loadStockPortfolio();
+    const state = await loadStockPortfolio();
 
     // 实时行情刷新
     try {
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}));
     const forceRebalance = body.force === true;
 
-    const state = loadStockPortfolio();
+    const state = await loadStockPortfolio();
     const today = new Date().toISOString().slice(0, 10);
 
     if (state.lastRebalanceDate === today && !forceRebalance) {
@@ -129,7 +129,7 @@ export async function POST(request: Request) {
       sectorData: null,
     })).filter(t => t.klines.length >= 20);
 
-    const icWeights = loadICWeights();
+    const icWeights = await loadICWeights();
     const quantReport = generateQuantReport(
       targets, northbound, marketChange,
       eventAnalysis.sectorSummaries, eventAnalysis.topEvents,
@@ -145,7 +145,7 @@ export async function POST(request: Request) {
       high: s.high, low: s.low, open: s.open, prevClose: s.prevClose,
     }));
 
-    const result = stockRebalance(state, quantReport, quotes);
+    const result = await stockRebalance(state, quantReport, quotes);
 
     // 通知
     if (result.actions.length > 0) {
@@ -185,7 +185,7 @@ const FULL_SCAN_INTERVAL_MS = 5 * 60 * 1000;
 
 export async function PUT() {
   try {
-    const state = loadStockPortfolio();
+    const state = await loadStockPortfolio();
     const hasHoldings = state.holdings.length > 0;
     const hasCapacity = state.holdings.length < 1 && state.cash > 3000;
 
@@ -259,7 +259,7 @@ export async function PUT() {
           sectorData: null,
         })).filter(t => t.klines.length >= 20);
 
-        const icWeights = loadICWeights();
+        const icWeights = await loadICWeights();
         quantReport = generateQuantReport(
           targets, northbound, marketChange,
           eventAnalysis.sectorSummaries, eventAnalysis.topEvents,
@@ -272,7 +272,7 @@ export async function PUT() {
       }
     }
 
-    const result = stockIntradayScan(state, quotes, quantReport);
+    const result = await stockIntradayScan(state, quotes, quantReport);
 
     if (result.triggered && result.actions.length > 0) {
       notifyStockActions("个股盘中", result.actions, result.reasoning);
