@@ -583,7 +583,7 @@ export function generateWeeklyStrategy(
   else positionAdvice = "2-3成仓位，轻仓博反弹或空仓等待";
 
   // 7. 北向资金趋势判断
-  const nbTotal = northbound.slice(0, 3).reduce((s, n) => s + n.netBuy, 0);
+  const nbTotal = northbound.slice(0, 3).reduce((s, n) => s + n.total, 0);
   const nbTrend = nbTotal > 30e8 ? "持续流入" : nbTotal < -30e8 ? "持续流出" : "震荡";
 
   // 8. 策略总结
@@ -1082,13 +1082,11 @@ function generateMondayForecast(
     }
 
     // 大盘风险覆盖
-    if (marketOutlook === "看跌" && action !== "周五赎回" && totalBearSeverity > 15) {
+    if (marketOutlook === "看跌" && totalBearSeverity > 15) {
       predicted -= 0.5;
       confidence = Math.min(confidence + 10, 80);
-      if (action !== "周五赎回") {
-        action = "周五赎回";
-        reason = "系统性利空风险较大，" + reason;
-      }
+      action = "周五赎回";
+      reason = "系统性利空风险较大，" + reason;
     }
 
     for (const fund of otcFunds) {
