@@ -12,6 +12,7 @@ import {
 import { analyzeEvents } from "@/lib/event-driven";
 import { sendNotification } from "@/lib/notify";
 import { batchScoreLimitUpQuality, formatQualityTag, type LimitUpQuality } from "@/lib/limitup-quality";
+import { runFullSentimentAnalysis, type EarlyBirdSignal } from "@/lib/sentiment-engine";
 
 export const dynamic = "force-dynamic";
 
@@ -296,9 +297,40 @@ export async function POST() {
       notifyNextDayWatchlist(watchlist);
     }
 
+    // === 情绪+事件+公司综合早鸟分析（取Top15候选） ===
+    let earlyBirds: EarlyBirdSignal[] = [];
+    let sentimentSummary = "";
+    try {
+      const topPicks = watchlist.picks.slice(0, 15);
+      const sentimentReport = await runFullSentimentAnalysis(
+        topPicks.map(p => ({
+          code: p.code,
+          name: p.name,
+          scalpQualityScore: p.qualityScore ?? p.score,
+          scalpQualityGrade: p.qualityGrade ?? (p.score >= 70 ? "极优板" : p.score >= 55 ? "中等质量板" : "低质量板"),
+          limitUpToday: p.limitUpToday,
+          changePercent: p.todayChangePercent,
+          turnoverRate: p.todayTurnoverRate,
+          amount: p.todayAmount,
+          marketCap: undefined as number | undefined,
+          pe: undefined as number | undefined,
+          sector: p.sectors?.[0],
+          sectorChangePercent: undefined as number | undefined,
+          consecutiveLimitUp: p.consecutiveUp || undefined,
+          qualityRiskFlags: p.qualityRiskFlags,
+        })),
+      );
+      earlyBirds = sentimentReport.earlyBirds;
+      sentimentSummary = sentimentReport.summary;
+    } catch (e) {
+      console.error("Sentiment analysis error:", e);
+    }
+
     return NextResponse.json({
       success: true,
       watchlist,
+      earlyBirds,
+      sentimentSummary,
     });
   } catch (error) {
     console.error("Next-day watchlist error:", error);

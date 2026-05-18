@@ -8,6 +8,7 @@ import {
   type ScalpQuote, type MarketEmotionData,
 } from "@/lib/scalp-engine";
 import { sendNotification, type NotifyLevel } from "@/lib/notify";
+import { assessMarketWind } from "@/lib/sentiment-engine";
 
 export const dynamic = "force-dynamic";
 
@@ -132,6 +133,23 @@ export async function PUT() {
     }
 
     const scalpConfig = await loadScalpConfig();
+
+    // 快速风向检查（不阻塞，仅提供上下文给策略和UI）
+    let windScore = 0;
+    let windLabel = "未知";
+    try {
+      const wind = await assessMarketWind();
+      windScore = wind.score;
+      windLabel = wind.label;
+      // 极度恶劣时，在 reasoning 里加警告
+      if (wind.label === "极度恶劣") {
+        scalpConfig.trade.positionScale = {
+          ...scalpConfig.trade.positionScale,
+          icePoint: 0, warm: 0.2, highTide: 0.1, divergence: 0,
+        };
+      }
+    } catch { /* 风向获取失败不影响主流程 */ }
+
     const result = await scalpScan(state, quotes, emotionData, scalpConfig);
 
     // 通知
@@ -162,6 +180,8 @@ export async function PUT() {
       actions: result.actions,
       emotion: result.emotion,
       emotionDetail: result.emotionDetail,
+      windScore,
+      windLabel,
       portfolio: {
         ...result.portfolio,
         totalValue: Math.round(tv * 100) / 100,
