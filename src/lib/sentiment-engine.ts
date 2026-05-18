@@ -399,9 +399,170 @@ export async function buildEventHeatMap(
 }
 
 // ================================================================
-//  3. 公司快析（单只股票多维度风控）
+//  3. 问题股黑名单检测 + 公司快析（多维度风控）
 // ================================================================
 
+/** 问题股检测结果 */
+export interface ProblemStockFlag {
+  code: string;
+  name: string;
+  blocked: boolean;             // true = 绝对禁止交易
+  severity: "禁止" | "高危" | "警告" | "关注";
+  flags: ProblemFlagDetail[];
+  totalRiskScore: number;       // 0-100
+}
+
+interface ProblemFlagDetail {
+  category: "退市风险" | "监管处罚" | "财务暴雷" | "异常交易" | "信息披露" | "股东风险" | "基本面恶化";
+  detail: string;
+  severity: "禁止" | "高危" | "警告";
+}
+
+// ---- 名称模式黑名单 ----
+const NAME_BLACKLIST_PATTERNS: { pattern: RegExp; reason: string; severity: ProblemFlagDetail["severity"] }[] = [
+  { pattern: /\*ST|^ST/, reason: "ST/*ST股，退市风险警示", severity: "禁止" },
+  { pattern: /退$|退市/, reason: "已进入退市整理期", severity: "禁止" },
+  { pattern: /^PT/, reason: "特别转让股，流动性极差", severity: "禁止" },
+  { pattern: /^N(?![\u4e00-\u9fa5])/, reason: "新股首日，无历史数据风险不可控", severity: "高危" },
+  { pattern: /^C(?![\u4e00-\u9fa5])/, reason: "次新股前5日，波动剧烈", severity: "高危" },
+];
+
+// ---- 代码段黑名单（财务暴雷/退市风险板块） ----
+const CODE_PREFIX_BLACKLIST: { prefix: string; reason: string }[] = [
+  // 400开头是老三板退市股
+];
+
+// ---- 问题股关键词（从名称/新闻中检测） ----
+const PROBLEM_KEYWORDS: { keywords: string[]; category: ProblemFlagDetail["category"]; severity: ProblemFlagDetail["severity"] }[] = [
+  // 退市风险
+  { keywords: ["退市风险", "终止上市", "暂停上市", "强制退市", "面值退市"], category: "退市风险", severity: "禁止" },
+  // 监管处罚
+  { keywords: ["立案调查", "证监会立案", "涉嫌信息披露违法违规", "涉嫌操纵市场", "涉嫌内幕交易"], category: "监管处罚", severity: "禁止" },
+  { keywords: ["行政处罚决定书", "市场禁入", "罚款", "没收违法所得"], category: "监管处罚", severity: "高危" },
+  { keywords: ["问询函", "关注函", "监管函", "警示函", "责令改正"], category: "监管处罚", severity: "警告" },
+  // 财务暴雷
+  { keywords: ["财务造假", "虚增收入", "虚增利润", "审计非标意见", "无法表示意见", "否定意见"], category: "财务暴雷", severity: "禁止" },
+  { keywords: ["业绩预告大幅修正", "业绩变脸", "商誉减值", "巨额亏损", "资不抵债", "净资产为负"], category: "财务暴雷", severity: "高危" },
+  { keywords: ["业绩预亏", "业绩大幅下滑", "营收下滑", "毛利率下滑", "经营性现金流为负"], category: "财务暴雷", severity: "警告" },
+  // 股东风险
+  { keywords: ["大股东减持", "控股股东减持", "清仓式减持", "减持预披露"], category: "股东风险", severity: "警告" },
+  { keywords: ["股权质押爆仓", "质押平仓", "强制平仓", "控股股东股份被冻结"], category: "股东风险", severity: "高危" },
+  { keywords: ["实际控制人被", "董事长被", "高管被"], category: "股东风险", severity: "高危" },
+  // 异常交易
+  { keywords: ["连续跌停", "一字跌停", "闪崩", "天地板", "地天板"], category: "异常交易", severity: "高危" },
+  { keywords: ["异常波动公告", "股票交易异常波动"], category: "异常交易", severity: "警告" },
+  // 信息披露
+  { keywords: ["信息披露违规", "信披违规", "未及时披露", "重大遗漏", "虚假记载", "误导性陈述"], category: "信息披露", severity: "高危" },
+  { keywords: ["延迟披露", "年报延期", "无法按期披露"], category: "信息披露", severity: "警告" },
+  // 基本面恶化
+  { keywords: ["连续亏损", "持续亏损", "扣非净利润为负", "主营业务萎缩", "负债率过高"], category: "基本面恶化", severity: "警告" },
+  { keywords: ["债务违约", "债券违约", "贷款逾期", "资金链断裂"], category: "基本面恶化", severity: "禁止" },
+];
+
+/**
+ * 检测问题股——所有分析的第一个关口
+ * 返回 blocked=true 的股票绝对不能买
+ */
+export function detectProblemStock(
+  code: string,
+  name: string,
+  extraData?: {
+    news?: string[];             // 最近新闻标题
+    changePercent?: number;      // 当日涨跌
+    consecutiveLimitDown?: number; // 连续跌停数
+    marketCap?: number;
+    pe?: number;
+  },
+): ProblemStockFlag {
+  const flags: ProblemFlagDetail[] = [];
+
+  // 1. 名称模式匹配
+  for (const rule of NAME_BLACKLIST_PATTERNS) {
+    if (rule.pattern.test(name)) {
+      flags.push({ category: "退市风险", detail: rule.reason, severity: rule.severity });
+    }
+  }
+
+  // 2. 从新闻中检测问题关键词
+  if (extraData?.news) {
+    for (const newsItem of extraData.news) {
+      for (const rule of PROBLEM_KEYWORDS) {
+        for (const kw of rule.keywords) {
+          if (newsItem.includes(kw)) {
+            flags.push({
+              category: rule.category,
+              detail: `新闻提及: "${newsItem.substring(0, 50)}"`,
+              severity: rule.severity,
+            });
+            break; // 同一规则只触发一次
+          }
+        }
+      }
+    }
+  }
+
+  // 3. 交易数据分析
+  if (extraData?.consecutiveLimitDown != null && extraData.consecutiveLimitDown >= 1) {
+    flags.push({
+      category: "异常交易",
+      detail: `连续${extraData.consecutiveLimitDown}个跌停，有未消化利空`,
+      severity: extraData.consecutiveLimitDown >= 2 ? "禁止" : "高危",
+    });
+  }
+
+  if (extraData?.changePercent != null && extraData.changePercent <= -9) {
+    flags.push({
+      category: "异常交易",
+      detail: `今日${extraData.changePercent.toFixed(1)}%接近跌停`,
+      severity: "高危",
+    });
+  }
+
+  // 4. 基本面红标
+  if (extraData?.pe != null && extraData.pe < 0) {
+    flags.push({
+      category: "基本面恶化",
+      detail: `PE为负(${extraData.pe.toFixed(1)})，公司亏损`,
+      severity: "警告",
+    });
+  }
+
+  // 去重
+  const seen = new Set<string>();
+  const uniqueFlags = flags.filter(f => {
+    const key = `${f.category}:${f.detail}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  // 综合判定
+  const hasBlock = uniqueFlags.some(f => f.severity === "禁止");
+  const hasHighRisk = uniqueFlags.some(f => f.severity === "高危");
+  const severity: ProblemStockFlag["severity"] = hasBlock ? "禁止" : hasHighRisk ? "高危"
+    : uniqueFlags.length >= 2 ? "警告" : uniqueFlags.length > 0 ? "关注" : "警告";
+
+  const riskScore = Math.min(100,
+    uniqueFlags.filter(f => f.severity === "禁止").length * 40 +
+    uniqueFlags.filter(f => f.severity === "高危").length * 25 +
+    uniqueFlags.filter(f => f.severity === "警告").length * 10
+  );
+
+  return {
+    code, name,
+    blocked: hasBlock || hasHighRisk,
+    severity,
+    flags: uniqueFlags,
+    totalRiskScore: riskScore,
+  };
+}
+
+// ---- 原有公司快析（增强版） ----
+
+/**
+ * 公司基本面 + 交易面快速风险评估
+ * blocked=true = 禁止交易，后续所有环节跳过
+ */
 export function quickCompanyAnalysis(
   code: string,
   name: string,
@@ -415,16 +576,49 @@ export function quickCompanyAnalysis(
     sectorChangePercent?: number;
     isST?: boolean;
     consecutiveLimitUp?: number;
+    consecutiveLimitDown?: number;
     high?: number;
     low?: number;
     prevClose?: number;
+    news?: string[];
   },
   heatMap?: EventHeatMap,
   config: SentimentConfig = DEFAULT_SENTIMENT_CONFIG,
-): CompanyQuickAnalysis {
+): CompanyQuickAnalysis & { blocked: boolean; blockReason: string } {
+  // === 第一关：问题股黑名单检测（绝对禁止） ===
+  const problemCheck = detectProblemStock(code, name, {
+    news: data.news,
+    changePercent: data.changePercent,
+    consecutiveLimitDown: data.consecutiveLimitDown,
+    marketCap: data.marketCap,
+    pe: data.pe,
+  });
+
+  if (problemCheck.blocked) {
+    return {
+      code, name,
+      blocked: true,
+      blockReason: problemCheck.flags.map(f => `[${f.severity}] ${f.detail}`).join("；"),
+      fundamentals: { marketCap: data.marketCap ?? 0, pe: data.pe ?? 0, turnoverRate: data.turnoverRate, amount: data.amount, sector: data.sector ?? "未知", sectorRank: 99 },
+      eventExposure: { relatedEvents: [], sectorSentiment: 0, sectorMomentum: 0 },
+      riskFlags: problemCheck.flags.map(f => ({ type: f.category as any, severity: f.severity === "禁止" ? "禁止" : f.severity === "高危" ? "高" : "中", detail: f.detail })),
+      riskScore: Math.max(80, problemCheck.totalRiskScore),
+      safeToTrade: false,
+    };
+  }
+
   const C = config.company;
   const riskFlags: RiskFlag[] = [];
-  let riskScore = 0;
+  let riskScore = problemCheck.totalRiskScore; // 继承黑名单检测的风险分
+
+  // 问题股标记同步到 riskFlags
+  for (const f of problemCheck.flags) {
+    riskFlags.push({
+      type: f.category as any,
+      severity: f.severity === "禁止" ? "禁止" : f.severity === "高危" ? "高" : "中",
+      detail: f.detail,
+    });
+  }
 
   // 1. 流动性风险
   if (data.amount < 50_000_000) {
@@ -485,6 +679,10 @@ export function quickCompanyAnalysis(
   const sectorMomentum = data.sectorChangePercent ?? data.changePercent;
   const sectorRank = 50; // 默认中等
 
+  // 问题股警告/关注级别也附加风险惩罚
+  const problemRiskPenalty = problemCheck.severity === "警告" ? 25
+    : problemCheck.severity === "关注" ? 10 : 0;
+
   return {
     code, name,
     fundamentals: {
@@ -497,8 +695,10 @@ export function quickCompanyAnalysis(
     },
     eventExposure: { relatedEvents, sectorSentiment, sectorMomentum },
     riskFlags,
-    riskScore: Math.min(100, riskScore),
-    safeToTrade: riskScore < 30 && !data.isST,
+    riskScore: Math.min(100, riskScore + problemRiskPenalty),
+    safeToTrade: (riskScore + problemRiskPenalty) < 30 && !data.isST && !problemCheck.blocked,
+    blocked: false,
+    blockReason: "",
   };
 }
 
@@ -532,9 +732,24 @@ export function computeEarlyBirdScore(
   input: EarlyBirdInput,
   wind: MarketWindVane,
   heatMap: EventHeatMap,
-  company: CompanyQuickAnalysis,
+  company: CompanyQuickAnalysis & { blocked?: boolean; blockReason?: string },
   config?: SentimentConfig,
 ): EarlyBirdSignal {
+  // === 问题股直接返回回避（不浪费计算） ===
+  if ((company as any).blocked) {
+    return {
+      code: input.code, name: input.name,
+      totalScore: 0,
+      level: "回避",
+      scalpScore: 0, sentimentScore: 0, eventScore: 0, companyScore: -50,
+      catalyst: "",
+      riskWarnings: [(company as any).blockReason || "问题股，禁止交易"],
+      entryWindow: "不适用",
+      confidenceFactors: [],
+      detectedAt: new Date().toISOString(),
+    };
+  }
+
   let scalpScore = 0;
   const confidenceFactors: string[] = [];
   const riskWarnings: string[] = [];

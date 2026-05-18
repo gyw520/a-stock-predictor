@@ -186,6 +186,30 @@ const EVENT_RULES: EventRule[] = [
   { keywords: ["养老金", "社保基金", "险资入市", "长期资金"],
     sectors: ["红利策略", "银行", "沪深300"], impact: "利好", weight: 6,
     reason: "长期资金入市利好蓝筹和高股息", category: "国家政策" },
+
+  // ===== 风险警示：问题股/市场风险 =====
+  { keywords: ["立案调查", "证监会立案", "涉嫌信息披露违法违规", "涉嫌操纵市场", "涉嫌内幕交易"],
+    sectors: ["个股风险"], impact: "利空", weight: 10,
+    reason: "监管立案调查，相关个股存在退市/处罚风险", category: "突发事件" },
+  { keywords: ["退市风险", "终止上市", "暂停上市", "强制退市", "面值退市"],
+    sectors: ["个股风险", "ST板块"], impact: "利空", weight: 10,
+    reason: "退市风险警示，相关个股必须回避", category: "突发事件" },
+  { keywords: ["财务造假", "虚增收入", "虚增利润", "审计非标", "无法表示意见"],
+    sectors: ["个股风险"], impact: "利空", weight: 10,
+    reason: "财务造假风险，相关公司基本面不可信", category: "突发事件" },
+  { keywords: ["大股东减持", "清仓式减持", "控股股东减持"],
+    excludeWords: ["增持"],
+    sectors: ["个股风险"], impact: "利空", weight: 7,
+    reason: "大股东减持套现，公司前景不被看好", category: "突发事件" },
+  { keywords: ["股权质押", "质押爆仓", "质押平仓", "强制平仓"],
+    sectors: ["个股风险"], impact: "利空", weight: 9,
+    reason: "质押风险暴露，可能引发股价暴跌", category: "突发事件" },
+  { keywords: ["债务违约", "债券违约", "贷款逾期", "资金链断裂"],
+    sectors: ["个股风险", "房地产"], impact: "利空", weight: 10,
+    reason: "债务违约风险，公司偿债能力堪忧", category: "突发事件" },
+  { keywords: ["问询函", "关注函", "监管函", "警示函"],
+    sectors: ["个股风险"], impact: "利空", weight: 5,
+    reason: "监管发函关注，公司信披/合规存在疑问", category: "突发事件" },
 ];
 
 // ==================== 事件识别结果 ====================
