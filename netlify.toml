@@ -7,3 +7,4 @@
 
 [context.production.environment]
   NETLIFY = "true"
+  WECOM_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=5f87cf06-3ec7-408a-8e89-9f16dbeaf20a"
