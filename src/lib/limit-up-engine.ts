@@ -327,8 +327,8 @@ export interface NextDayPick {
   limitUpToday: boolean;      // 今日涨停
   nearLimitUpToday: boolean;  // 今日差点涨停(≥8%)
   addedDate: string;
-  // 综合分析
-  analysis: NextDayAnalysis;
+  // 综合分析（按需生成，默认不生成以节省 serverless 时间）
+  analysis?: NextDayAnalysis;
   // 板块/概念
   sectors?: string[];   // 所属行业板块
   concepts?: string[];  // 所属概念板块
@@ -433,7 +433,9 @@ export function generateNextDayWatchlist(
   quotes: QuoteData[],
   klineMap: Record<string, KLineSimple[]>,
   marketCtx?: MarketContext,
+  options?: { generateAnalysis?: boolean },
 ): NextDayWatchlist {
+  const generateAnalysis = options?.generateAnalysis ?? false;
   const today = new Date().toISOString().slice(0, 10);
   const picks: NextDayPick[] = [];
 
@@ -560,10 +562,10 @@ export function generateNextDayWatchlist(
     else if (score >= 55) level = "高";
     else level = "中";
 
-    // ======= 综合分析 =======
-    const analysis = buildAnalysis(q, klines, {
-      limitUpToday, nearLimitUpToday, consecutiveUp, volumeExpanding, score, reasons,
-    }, marketCtx);
+    // ======= 综合分析（按需生成，大量文字分析仅在用户点击详情时触发） =======
+    const analysis = generateAnalysis
+      ? buildAnalysis(q, klines, { limitUpToday, nearLimitUpToday, consecutiveUp, volumeExpanding, score, reasons }, marketCtx)
+      : undefined;
 
     picks.push({
       code: q.code,
@@ -597,8 +599,28 @@ export function generateNextDayWatchlist(
 }
 
 // ================================================================
-//  综合分析生成
+//  综合分析生成（按需调用，不参与 watchlist 主流程）
 // ================================================================
+
+/**
+ * 为单只股票生成综合分析（上百万字符的文字分析）
+ * 仅在用户点击查看详情时调用，不在批量生成 watchlist 时调用
+ */
+export function generatePickAnalysis(
+  pick: Pick<NextDayPick, "code" | "name" | "limitUpToday" | "nearLimitUpToday" | "consecutiveUp" | "volumeExpanding" | "score" | "reasons">,
+  quote: QuoteData,
+  klines: KLineSimple[],
+  marketCtx?: MarketContext,
+): NextDayAnalysis {
+  return buildAnalysis(quote, klines, {
+    limitUpToday: pick.limitUpToday,
+    nearLimitUpToday: pick.nearLimitUpToday,
+    consecutiveUp: pick.consecutiveUp,
+    volumeExpanding: pick.volumeExpanding,
+    score: pick.score,
+    reasons: pick.reasons,
+  }, marketCtx);
+}
 
 function buildAnalysis(
   q: QuoteData,

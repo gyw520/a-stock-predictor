@@ -4,7 +4,7 @@ import {
   type StockQuote,
 } from "@/lib/stock-api";
 import {
-  loadScalpPortfolio, scalpScan, judgeMarketEmotion,
+  loadScalpPortfolio, loadScalpConfig, scalpScan, judgeMarketEmotion,
   type ScalpQuote, type MarketEmotionData,
 } from "@/lib/scalp-engine";
 import { sendNotification, type NotifyLevel } from "@/lib/notify";
@@ -131,7 +131,8 @@ export async function PUT() {
       if (breadth.continuousLimitUp > 0) emotionData.highLimitCount = breadth.continuousLimitUp;
     }
 
-    const result = await scalpScan(state, quotes, emotionData);
+    const scalpConfig = await loadScalpConfig();
+    const result = await scalpScan(state, quotes, emotionData, scalpConfig);
 
     // 通知
     if (result.actions.length > 0) {

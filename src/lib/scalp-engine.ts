@@ -171,29 +171,80 @@ export interface MarketEmotionData {
 }
 
 // ================================================================
+//  可配置参数（支持回测优化 + Walk-Forward 自适应）
+// ================================================================
+
+export interface ScalpConfig {
+  // 情绪阈值（基于市场容量自适应）
+  emotion: {
+    limitUpHot: number;         // 涨停≥N家 → 热
+    limitUpNormal: number;      // 涨停≥N家 → 正常
+    limitUpCold: number;        // 涨停≥N家 → 冷
+    sealRateStrong: number;     // 封板率≥N% → 强
+    sealRateWeak: number;       // 封板率≤N% → 弱
+    yesterdayAvgStrong: number;  // 昨涨停今≥N% → 大赚效应
+    yesterdayAvgNormal: number;  // 昨涨停今≥N% → 赚钱效应
+    yesterdayAvgWeak: number;    // 昨涨停今≤N% → 亏钱效应
+    highLimitStrong: number;    // 连板≥N只 → 有高度
+    upDownStrong: number;       // 涨跌比≥N → 强势
+    upDownWeak: number;         // 涨跌比≤N → 弱势
+    // 情绪判定分数线
+    scoreHighTide: number;      // ≥N分 → 高潮
+    scoreWarm: number;          // ≥N分 → 回暖
+    scoreDivergence: number;    // ≥N分 → 分歧
+    scoreEbb: number;           // ≥N分 → 退潮（<则冰点）
+  };
+  // 交易风控参数
+  trade: {
+    stopLossPct: number;        // 止损%（负数）
+    takeProfitStart: number;    // 移动止盈起点%
+    takeProfitLock: number;     // 从最高回落N%卖出
+    maxHoldDays: number;        // 最长持股天数
+    maxChaseOpenPct: number;    // 竞价高开>N%不追
+    cutLossOpenPct: number;     // 竞价低开>N%割
+    weekMaxLoss: number;        // 每周最多亏损次数
+    consecutiveLossPause: number; // 连亏N次暂停
+    pauseDays: number;          // 暂停天数
+    positionScale: {
+      icePoint: number;         // 冰点仓位 0-1
+      warm: number;             // 回暖仓位
+      highTide: number;         // 高潮仓位
+      divergence: number;       // 分歧仓位
+    };
+  };
+}
+
+export const DEFAULT_SCALP_CONFIG: ScalpConfig = {
+  emotion: {
+    limitUpHot: 80, limitUpNormal: 30, limitUpCold: 15,
+    sealRateStrong: 80, sealRateWeak: 40,
+    yesterdayAvgStrong: 5, yesterdayAvgNormal: 2, yesterdayAvgWeak: -3,
+    highLimitStrong: 5,
+    upDownStrong: 3, upDownWeak: 0.5,
+    scoreHighTide: 50, scoreWarm: 25, scoreDivergence: 0, scoreEbb: -15,
+  },
+  trade: {
+    stopLossPct: -2,
+    takeProfitStart: 5, takeProfitLock: 3,
+    maxHoldDays: 3, maxChaseOpenPct: 7, cutLossOpenPct: -3,
+    weekMaxLoss: 3, consecutiveLossPause: 2, pauseDays: 2,
+    positionScale: { icePoint: 0.5, warm: 1.0, highTide: 0.6, divergence: 0.3 },
+  },
+};
+
+// ================================================================
 //  交易参数
 // ================================================================
 
 const INITIAL_CAPITAL = 10000;
-const MAX_HOLDINGS = 1;          // 超短线只持1只
+const MAX_HOLDINGS = 1;
 const LOT_SIZE = 100;
-const COMMISSION_RATE = 0.00025; // 万2.5
+const COMMISSION_RATE = 0.00025;
 const MIN_COMMISSION = 5;
-const STAMP_TAX_RATE = 0.0005;   // 印花税0.05%
-const SLIPPAGE_RATE = 0.001;     // 0.1%
-
-// 超短线风控铁律
-const STOP_LOSS_PCT = -2;        // 亏2%无条件止损
-const TAKE_PROFIT_START = 5;     // 盈利5%开始移动止盈
-const TAKE_PROFIT_LOCK = 3;      // 盈利锁定：从最高回落3%就卖
-const MAX_HOLD_DAYS = 3;         // 最长持有3天
-const MAX_CHASE_OPEN_PCT = 7;    // 竞价高开>7%不追
-const CUT_LOSS_OPEN_PCT = -3;    // 竞价低开>3%直接割
-const WEEK_MAX_LOSS = 3;         // 每周最多亏3次
-const PAUSE_DAYS = 2;            // 连亏后暂停天数
-const CONSECUTIVE_LOSS_PAUSE = 2; // 连亏2次暂停
+const STAMP_TAX_RATE = 0.0005;
+const SLIPPAGE_RATE = 0.001;
+const CASH_RESERVE = 500;
 const MIN_TRADE_AMOUNT = 2000;
-const CASH_RESERVE = 500;        // 留500元缓冲
 
 // ================================================================
 //  持久化
@@ -229,6 +280,29 @@ async function saveScalpPortfolio(state: ScalpState): Promise<void> {
   return kvSave("scalp-portfolio", state);
 }
 
+export async function loadScalpConfig(): Promise<ScalpConfig> {
+  const stored = await kvLoad<Partial<ScalpConfig> | null>("scalp-config", null);
+  if (!stored) return { ...DEFAULT_SCALP_CONFIG };
+  // 深度合并：用 stored 值覆盖默认值
+  return deepMergeConfigs(DEFAULT_SCALP_CONFIG, stored);
+}
+
+export async function saveScalpConfig(config: ScalpConfig): Promise<void> {
+  return kvSave("scalp-config", config);
+}
+
+function deepMergeConfigs(defaults: any, stored: any): any {
+  const result = { ...defaults };
+  for (const key of Object.keys(stored)) {
+    if (stored[key] && typeof stored[key] === "object" && !Array.isArray(stored[key])) {
+      result[key] = deepMergeConfigs(defaults[key] || {}, stored[key]);
+    } else if (stored[key] != null) {
+      result[key] = stored[key];
+    }
+  }
+  return result;
+}
+
 // ================================================================
 //  情绪周期判断（超短线核心中的核心）
 // ================================================================
@@ -244,105 +318,99 @@ async function saveScalpPortfolio(state: ScalpState): Promise<void> {
  *   - 回暖时进攻（最佳出手时机）
  *   - 退潮时防守（减少操作）
  */
-export function judgeMarketEmotion(data: MarketEmotionData, prevEmotion?: MarketEmotion): {
+export function judgeMarketEmotion(
+  data: MarketEmotionData,
+  prevEmotion?: MarketEmotion,
+  config: ScalpConfig = DEFAULT_SCALP_CONFIG,
+): {
   emotion: MarketEmotion;
   score: number;
   detail: string;
 } {
+  const C = config.emotion;
   let score = 0;
   const details: string[] = [];
 
   // 1. 涨停家数（权重30%）
-  if (data.limitUpCount >= 80) { score += 30; details.push(`涨停${data.limitUpCount}家(极热)`); }
-  else if (data.limitUpCount >= 50) { score += 20; details.push(`涨停${data.limitUpCount}家(热)`); }
-  else if (data.limitUpCount >= 30) { score += 10; details.push(`涨停${data.limitUpCount}家(正常)`); }
-  else if (data.limitUpCount >= 15) { score += 0; details.push(`涨停${data.limitUpCount}家(冷)`); }
+  if (data.limitUpCount >= C.limitUpHot) { score += 30; details.push(`涨停${data.limitUpCount}家(极热)`); }
+  else if (data.limitUpCount >= C.limitUpNormal * 1.6) { score += 20; details.push(`涨停${data.limitUpCount}家(热)`); }
+  else if (data.limitUpCount >= C.limitUpNormal) { score += 10; details.push(`涨停${data.limitUpCount}家(正常)`); }
+  else if (data.limitUpCount >= C.limitUpCold) { score += 0; details.push(`涨停${data.limitUpCount}家(冷)`); }
   else { score -= 15; details.push(`涨停${data.limitUpCount}家(冰点)`); }
 
   // 2. 封板率（权重20%）
-  if (data.sealRate >= 80) { score += 15; details.push(`封板率${data.sealRate.toFixed(0)}%(强)`); }
+  if (data.sealRate >= C.sealRateStrong) { score += 15; details.push(`封板率${data.sealRate.toFixed(0)}%(强)`); }
   else if (data.sealRate >= 60) { score += 8; details.push(`封板率${data.sealRate.toFixed(0)}%`); }
   else if (data.sealRate >= 40) { score += 0; }
   else { score -= 10; details.push(`封板率${data.sealRate.toFixed(0)}%(弱)`); }
 
-  // 3. 昨日涨停今日表现（权重25%）— 超短线最关键指标
-  if (data.yesterdayLimitUpAvgOpen >= 5) { score += 20; details.push(`昨涨停今+${data.yesterdayLimitUpAvgOpen.toFixed(1)}%(大赚效应)`); }
-  else if (data.yesterdayLimitUpAvgOpen >= 2) { score += 12; details.push(`昨涨停今+${data.yesterdayLimitUpAvgOpen.toFixed(1)}%(赚钱效应)`); }
+  // 3. 昨日涨停今日表现（权重25%）
+  if (data.yesterdayLimitUpAvgOpen >= C.yesterdayAvgStrong) { score += 20; details.push(`昨涨停今+${data.yesterdayLimitUpAvgOpen.toFixed(1)}%(大赚效应)`); }
+  else if (data.yesterdayLimitUpAvgOpen >= C.yesterdayAvgNormal) { score += 12; details.push(`昨涨停今+${data.yesterdayLimitUpAvgOpen.toFixed(1)}%(赚钱效应)`); }
   else if (data.yesterdayLimitUpAvgOpen >= 0) { score += 3; details.push(`昨涨停今+${data.yesterdayLimitUpAvgOpen.toFixed(1)}%`); }
-  else if (data.yesterdayLimitUpAvgOpen >= -3) { score -= 8; details.push(`昨涨停今${data.yesterdayLimitUpAvgOpen.toFixed(1)}%(亏钱效应)`); }
+  else if (data.yesterdayLimitUpAvgOpen >= C.yesterdayAvgWeak) { score -= 8; details.push(`昨涨停今${data.yesterdayLimitUpAvgOpen.toFixed(1)}%(亏钱效应)`); }
   else { score -= 20; details.push(`昨涨停今${data.yesterdayLimitUpAvgOpen.toFixed(1)}%(惨烈亏钱效应)`); }
 
   // 4. 连板高度（权重15%）
-  if (data.highLimitCount >= 5) { score += 12; details.push(`${data.highLimitCount}只连板(有高度)`); }
+  if (data.highLimitCount >= C.highLimitStrong) { score += 12; details.push(`${data.highLimitCount}只连板(有高度)`); }
   else if (data.highLimitCount >= 3) { score += 6; }
   else if (data.highLimitCount >= 1) { score += 2; }
   else { score -= 5; details.push("无连板(无高度)"); }
 
   // 5. 涨跌家数（权重10%）
   const upDownRatio = data.downCount > 0 ? data.upCount / data.downCount : data.upCount;
-  if (upDownRatio >= 3) { score += 8; }
+  if (upDownRatio >= C.upDownStrong) { score += 8; }
   else if (upDownRatio >= 1.5) { score += 4; }
   else if (upDownRatio >= 1) { score += 0; }
-  else if (upDownRatio >= 0.5) { score -= 5; }
+  else if (upDownRatio >= C.upDownWeak) { score -= 5; }
   else { score -= 10; details.push("普跌"); }
 
   // 判定情绪阶段
   let emotion: MarketEmotion;
-  if (score >= 50) {
-    emotion = "高潮";
-  } else if (score >= 25) {
-    emotion = "回暖";
-  } else if (score >= 0) {
-    emotion = "分歧";
-  } else if (score >= -15) {
-    emotion = "退潮";
-  } else {
-    emotion = "冰点";
-  }
+  if (score >= C.scoreHighTide) { emotion = "高潮"; }
+  else if (score >= C.scoreWarm) { emotion = "回暖"; }
+  else if (score >= C.scoreDivergence) { emotion = "分歧"; }
+  else if (score >= C.scoreEbb) { emotion = "退潮"; }
+  else { emotion = "冰点"; }
 
-  // 结合前一天情绪做平滑（防止频繁切换）
+  // 结合前一天情绪做平滑
   if (prevEmotion) {
-    // 高潮→退潮 只需score<30
-    if (prevEmotion === "高潮" && score >= 30) emotion = "高潮";
-    // 冰点→回暖 只需score>-5
-    if (prevEmotion === "冰点" && score <= -5) emotion = "冰点";
+    if (prevEmotion === "高潮" && score >= C.scoreWarm + 5) emotion = "高潮";
+    if (prevEmotion === "冰点" && score <= C.scoreEbb + 5) emotion = "冰点";
   }
 
-  return {
-    emotion,
-    score,
-    detail: details.join(" | "),
-  };
+  return { emotion, score, detail: details.join(" | ") };
 }
 
 /**
  * 情绪周期对应的操作策略
  */
-function getEmotionStrategy(emotion: MarketEmotion): {
+function getEmotionStrategy(emotion: MarketEmotion, config: ScalpConfig = DEFAULT_SCALP_CONFIG): {
   allowBuy: boolean;
-  positionScale: number;  // 仓位比例 0-1
+  positionScale: number;
   preferredStrategies: ScalpStrategy[];
   riskNote: string;
 } {
+  const PS = config.trade.positionScale;
   switch (emotion) {
     case "冰点":
       return {
         allowBuy: true,
-        positionScale: 0.5,       // 半仓试探
+        positionScale: PS.icePoint,
         preferredStrategies: ["情绪冰点反转", "龙头低吸"],
         riskNote: "🧊 冰点期：试探性参与首个涨停/龙头反包，半仓",
       };
     case "回暖":
       return {
         allowBuy: true,
-        positionScale: 1.0,       // 满仓进攻
+        positionScale: PS.warm,
         preferredStrategies: ["极优板竞价", "首板打板", "二板确认"],
         riskNote: "🌅 回暖期：最佳出手时机！大胆参与龙头和首板",
       };
     case "高潮":
       return {
         allowBuy: true,
-        positionScale: 0.6,       // 谨慎控仓
+        positionScale: PS.highTide,
         preferredStrategies: ["极优板竞价", "二板确认"],
         riskNote: "🔥 高潮期：注意风险！只做最强龙头，见好就收",
       };
@@ -357,7 +425,7 @@ function getEmotionStrategy(emotion: MarketEmotion): {
     default:
       return {
         allowBuy: true,
-        positionScale: 0.3,       // 小仓试探
+        positionScale: PS.divergence,
         preferredStrategies: ["极优板竞价", "龙头低吸"],
         riskNote: "⚖️ 分歧期：轻仓试错，等方向明朗",
       };
@@ -372,7 +440,9 @@ export async function scalpScan(
   state: ScalpState,
   quotes: ScalpQuote[],
   emotionData?: MarketEmotionData,
+  config: ScalpConfig = DEFAULT_SCALP_CONFIG,
 ): Promise<ScalpScanResult> {
+  const C = config.trade;
   const today = new Date().toISOString().slice(0, 10);
   const now = new Date().toISOString();
   const bjNow = new Date(Date.now() + 8 * 3600000);
@@ -404,7 +474,7 @@ export async function scalpScan(
   if (emotionData) {
     const prevEmotion = state.emotionHistory.length > 0
       ? state.emotionHistory[state.emotionHistory.length - 1].emotion : undefined;
-    const emo = judgeMarketEmotion(emotionData, prevEmotion);
+    const emo = judgeMarketEmotion(emotionData, prevEmotion, config);
     emotion = emo.emotion;
     emotionDetail = emo.detail;
     state.currentEmotion = emotion;
@@ -420,7 +490,7 @@ export async function scalpScan(
     }
   }
 
-  const emoStrategy = getEmotionStrategy(emotion);
+  const emoStrategy = getEmotionStrategy(emotion, config);
   reasoning.push(emoStrategy.riskNote);
 
   // == 暂停检查 ==
@@ -432,7 +502,7 @@ export async function scalpScan(
   }
 
   // == 周亏损次数检查 ==
-  if (state.weekLossCount >= WEEK_MAX_LOSS) {
+  if (state.weekLossCount >= C.weekMaxLoss) {
     reasoning.push(`⛔ 本周已亏${state.weekLossCount}次，暂停操作`);
     updateScalpSnapshot(state, today, emotion);
     saveScalpPortfolio(state);
@@ -463,28 +533,28 @@ export async function scalpScan(
     let sellReason = "";
     let strategy: ScalpStrategy = "核按钮止损";
 
-    // 铁律①：亏2%无条件止损
-    if (h.pnlPercent <= STOP_LOSS_PCT) {
-      sellReason = `核按钮止损: 亏${h.pnlPercent.toFixed(1)}%≤${STOP_LOSS_PCT}%`;
+    // 铁律①：亏N%无条件止损
+    if (h.pnlPercent <= C.stopLossPct) {
+      sellReason = `核按钮止损: 亏${h.pnlPercent.toFixed(1)}%≤${C.stopLossPct}%`;
       strategy = "核按钮止损";
     }
 
-    // 铁律②：竞价低开>3%直接割
-    if (!sellReason && minutesInDay <= 575 && q.changePercent <= CUT_LOSS_OPEN_PCT) {
+    // 铁律②：竞价低开>N%直接割
+    if (!sellReason && minutesInDay <= 575 && q.changePercent <= C.cutLossOpenPct) {
       sellReason = `竞价低开割肉: 低开${q.changePercent.toFixed(1)}%`;
       strategy = "竞价走人";
     }
 
-    // 铁律③：持股超3天尾盘清仓
-    if (!sellReason && h.holdDays >= MAX_HOLD_DAYS && minutesInDay >= 870) { // 14:30
+    // 铁律③：持股超N天尾盘清仓
+    if (!sellReason && h.holdDays >= C.maxHoldDays && minutesInDay >= 870) {
       sellReason = `持股${h.holdDays}天超期清仓`;
       strategy = "尾盘清仓";
     }
 
     // 移动止盈：从最高价回落
-    if (!sellReason && h.pnlPercent >= TAKE_PROFIT_START) {
+    if (!sellReason && h.pnlPercent >= C.takeProfitStart) {
       const dropFromPeak = h.peakPrice > 0 ? ((h.peakPrice - h.currentPrice) / h.peakPrice) * 100 : 0;
-      if (dropFromPeak >= TAKE_PROFIT_LOCK) {
+      if (dropFromPeak >= C.takeProfitLock) {
         sellReason = `移动止盈: 从最高${h.peakPrice.toFixed(2)}回落${dropFromPeak.toFixed(1)}%`;
         strategy = "止盈落袋";
       }
@@ -536,9 +606,9 @@ export async function scalpScan(
       } else {
         state.weekLossCount++;
         state.consecutiveLoss++;
-        if (state.consecutiveLoss >= CONSECUTIVE_LOSS_PAUSE) {
+        if (state.consecutiveLoss >= C.consecutiveLossPause) {
           const pauseDate = new Date();
-          pauseDate.setDate(pauseDate.getDate() + PAUSE_DAYS + 1);
+          pauseDate.setDate(pauseDate.getDate() + C.pauseDays + 1);
           state.pausedUntil = pauseDate.toISOString().slice(0, 10);
           reasoning.push(`⛔ 连亏${state.consecutiveLoss}次，暂停至${state.pausedUntil}`);
         }
@@ -565,19 +635,19 @@ export async function scalpScan(
 
       // ====== 策略A：极优板竞价买入（9:25-9:40）======
       if (!bought && minutesInDay >= 565 && minutesInDay <= 580) {
-        bought = await tryAuctionBuy(state, quoteMap, today, now, actions, reasoning, emoStrategy.positionScale);
+        bought = await tryAuctionBuy(state, quoteMap, today, now, actions, reasoning, emoStrategy.positionScale, config);
         if (bought) changed = true;
       }
 
       // ====== 策略B：首板打板（10:00-14:00，盘中捕捉涨停）======
       if (!bought && minutesInDay >= 600 && minutesInDay <= 840) {
-        bought = tryFirstBoardBuy(state, quotes, today, now, actions, reasoning, emotion, emoStrategy.positionScale);
+        bought = await tryFirstBoardBuy(state, quotes, today, now, actions, reasoning, emotion, emoStrategy.positionScale, config);
         if (bought) changed = true;
       }
 
       // ====== 策略C：龙头低吸（10:30-14:00，龙头回调买入）======
       if (!bought && minutesInDay >= 630 && minutesInDay <= 840 && (emotion === "冰点" || emotion === "回暖")) {
-        bought = await tryLeaderDipBuy(state, quotes, today, now, actions, reasoning, emoStrategy.positionScale);
+        bought = await tryLeaderDipBuy(state, quotes, today, now, actions, reasoning, emoStrategy.positionScale, config);
         if (bought) changed = true;
       }
     }
@@ -609,7 +679,9 @@ async function tryAuctionBuy(
   actions: ScalpAction[],
   reasoning: string[],
   positionScale: number,
+  config: ScalpConfig,
 ): Promise<boolean> {
+  const C = config.trade;
   const watchlist = await loadNextDayWatchlist();
   if (!watchlist || !watchlist.picks) return false;
 
@@ -630,28 +702,28 @@ async function tryAuctionBuy(
   const q = quoteMap.get(pick.code);
   if (!q || q.price <= 0) return false;
 
-  // 竞价高开>7%不追
+  // 竞价高开>N%不追
   const openPct = q.prevClose > 0 ? ((q.price - q.prevClose) / q.prevClose) * 100 : 0;
-  if (openPct > MAX_CHASE_OPEN_PCT) {
-    reasoning.push(`⏸️ ${pick.name} 极优板但高开${openPct.toFixed(1)}%>${MAX_CHASE_OPEN_PCT}%，不追`);
+  if (openPct > C.maxChaseOpenPct) {
+    reasoning.push(`⏸️ ${pick.name} 极优板但高开${openPct.toFixed(1)}%>${C.maxChaseOpenPct}%，不追`);
     return false;
   }
-  // 低开>3%也不买
-  if (openPct < CUT_LOSS_OPEN_PCT) {
+  // 低开>N%也不买
+  if (openPct < C.cutLossOpenPct) {
     reasoning.push(`⏸️ ${pick.name} 极优板但低开${openPct.toFixed(1)}%，信号失效`);
     return false;
   }
 
   return executeBuy(state, q, pick.name, today, now, actions, reasoning, positionScale * (pick.positionMultiplier ?? 1), "极优板竞价",
     `极优板竞价: 质量${pick.qualityScore}分/${pick.qualityGrade} 开${openPct >= 0 ? "+" : ""}${openPct.toFixed(1)}%`,
-    pick.qualityScore ?? 0);
+    pick.qualityScore ?? 0, C);
 }
 
 // ================================================================
 //  策略B：首板打板
 // ================================================================
 
-function tryFirstBoardBuy(
+async function tryFirstBoardBuy(
   state: ScalpState,
   quotes: ScalpQuote[],
   today: string,
@@ -660,25 +732,45 @@ function tryFirstBoardBuy(
   reasoning: string[],
   emotion: MarketEmotion,
   positionScale: number,
-): boolean {
+  config: ScalpConfig,
+): Promise<boolean> {
   // 只在回暖/高潮期打板
   if (emotion !== "回暖" && emotion !== "高潮" && emotion !== "冰点") return false;
 
   const holdCodes = new Set(state.holdings.map(h => h.code));
+
+  // 加载 watchlist 获取质量评分（与策略A/C统一数据源）
+  let qualityMap: Map<string, { score: number; multiplier: number; flags: string[] }> = new Map();
+  try {
+    const watchlist = await loadNextDayWatchlist();
+    if (watchlist?.picks) {
+      for (const p of watchlist.picks) {
+        if (p.limitUpToday && (p.qualityScore ?? 0) >= 50) {
+          qualityMap.set(p.code, {
+            score: p.qualityScore ?? 0,
+            multiplier: p.positionMultiplier ?? 1,
+            flags: p.qualityRiskFlags || [],
+          });
+        }
+      }
+    }
+  } catch { /* 无 watchlist 时降级为纯行情筛选 */ }
 
   // 找刚封板的股票（涨停 + 换手合理 + 成交额够大）
   const boardCandidates = quotes.filter(q =>
     q.isLimitUp &&
     !holdCodes.has(q.code) &&
     (q.code.startsWith("60") || q.code.startsWith("00")) &&
-    q.turnoverRate >= 3 && q.turnoverRate <= 20 &&  // 换手3-20%
-    q.amount >= 100000000 &&                         // 成交额1亿+
-    !q.name.includes("ST") && !q.name.includes("退")
+    q.turnoverRate >= 3 && q.turnoverRate <= 20 &&
+    q.amount >= 100000000 &&
+    !q.name.includes("ST") && !q.name.includes("退") &&
+    // 有 watchlist 时过滤低质量/有禁止标记的
+    (!qualityMap.has(q.code) || !qualityMap.get(q.code)!.flags.some(f => f.includes("⛔") || f.includes("🚫")))
   );
 
   if (boardCandidates.length === 0) return false;
 
-  // 打分选最强的一只
+  // 打分选最强的一只（融入 watchlist 质量分）
   const scored = boardCandidates.map(q => {
     let score = 0;
     // 换手率适中
@@ -686,8 +778,14 @@ function tryFirstBoardBuy(
     // 成交额大
     if (q.amount >= 500000000) score += 10;
     else if (q.amount >= 200000000) score += 5;
-    // 冰点期首板加分（别人不敢我敢）
+    // 冰点期首板加分
     if (emotion === "冰点") score += 15;
+    // watchlist 质量加分（核心改进：策略B现在认可质量因子）
+    const qInfo = qualityMap.get(q.code);
+    if (qInfo) {
+      score += Math.round(qInfo.score / 10);     // 质量分 /10 加成
+      if (qInfo.score >= 80) score += 5;         // 极优板额外加成
+    }
     return { quote: q, score };
   }).sort((a, b) => b.score - a.score);
 
@@ -696,10 +794,12 @@ function tryFirstBoardBuy(
 
   // 打板只用半仓（风险大）
   const scale = positionScale * 0.5;
+  const qInfo = qualityMap.get(best.quote.code);
+  const qualityTag = qInfo ? ` 质量${qInfo.score}分` : "";
 
   return executeBuy(state, best.quote, best.quote.name, today, now, actions, reasoning, scale, "首板打板",
-    `首板打板: 换手${best.quote.turnoverRate.toFixed(1)}% 额${(best.quote.amount / 1e8).toFixed(1)}亿`,
-    0);
+    `首板打板: 换手${best.quote.turnoverRate.toFixed(1)}% 额${(best.quote.amount / 1e8).toFixed(1)}亿${qualityTag}`,
+    qInfo?.score ?? 0, config.trade);
 }
 
 // ================================================================
@@ -714,7 +814,9 @@ async function tryLeaderDipBuy(
   actions: ScalpAction[],
   reasoning: string[],
   positionScale: number,
+  config: ScalpConfig,
 ): Promise<boolean> {
+  const C = config.trade;
   const watchlist = await loadNextDayWatchlist();
   if (!watchlist || !watchlist.picks) return false;
 
@@ -744,7 +846,7 @@ async function tryLeaderDipBuy(
 
     return executeBuy(state, q, pick.name, today, now, actions, reasoning, positionScale * 0.6, "龙头低吸",
       `龙头低吸: 昨涨停今回调${q.changePercent.toFixed(1)}% 质量${pick.qualityScore}分`,
-      pick.qualityScore ?? 0);
+      pick.qualityScore ?? 0, C);
   }
 
   return false;
@@ -766,6 +868,7 @@ function executeBuy(
   strategy: ScalpStrategy,
   reason: string,
   qualityScore: number,
+  C: ScalpConfig["trade"],
 ): boolean {
   const maxBuyAmount = Math.min(
     (state.cash - CASH_RESERVE) * positionScale,
@@ -783,8 +886,8 @@ function executeBuy(
   if (totalCost > state.cash - CASH_RESERVE) return false;
 
   // 计算止损止盈价
-  const stopLossPrice = Math.round(buyPrice * (1 + STOP_LOSS_PCT / 100) * 100) / 100;
-  const targetSellPrice = Math.round(buyPrice * (1 + TAKE_PROFIT_START / 100) * 100) / 100;
+  const stopLossPrice = Math.round(buyPrice * (1 + C.stopLossPct / 100) * 100) / 100;
+  const targetSellPrice = Math.round(buyPrice * (1 + C.takeProfitStart / 100) * 100) / 100;
 
   state.cash -= totalCost;
   state.totalCommission += commission;
@@ -830,8 +933,11 @@ function calcCommission(amount: number): number {
 
 function updateScalpSnapshot(state: ScalpState, today: string, emotion: MarketEmotion) {
   const tv = state.cash + state.holdings.reduce((s, h) => s + h.currentValue, 0);
-  const prevSnap = state.snapshots[state.snapshots.length - 1];
-  const dailyPnl = prevSnap ? tv - (prevSnap.totalValue || state.initialCapital) : 0;
+  const YESTERDAY_SNAP = state.snapshots.length > 0
+    ? [...state.snapshots].reverse().find(s => s.date < today)
+    : null;
+  const prevDayValue = YESTERDAY_SNAP?.totalValue ?? state.initialCapital;
+  const dailyPnl = tv - prevDayValue;
 
   const snap: ScalpSnapshot = {
     date: today,
@@ -839,7 +945,7 @@ function updateScalpSnapshot(state: ScalpState, today: string, emotion: MarketEm
     cash: Math.round(state.cash * 100) / 100,
     holdingValue: Math.round((tv - state.cash) * 100) / 100,
     dailyPnl: Math.round(dailyPnl * 100) / 100,
-    dailyPnlPercent: tv > 0 ? Math.round((dailyPnl / (prevSnap?.totalValue || state.initialCapital)) * 10000) / 100 : 0,
+    dailyPnlPercent: prevDayValue > 0 ? Math.round((dailyPnl / prevDayValue) * 10000) / 100 : 0,
     totalPnl: Math.round((tv - state.initialCapital) * 100) / 100,
     totalPnlPercent: Math.round(((tv - state.initialCapital) / state.initialCapital) * 10000) / 100,
     emotion,
