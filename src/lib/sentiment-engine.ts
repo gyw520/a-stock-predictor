@@ -276,10 +276,10 @@ export async function assessMarketWind(
   );
 
   const label: MarketWindVane["label"] =
-    totalScore >= 30 ? "极度乐观" :
-    totalScore >= 10 ? "偏暖" :
-    totalScore >= -10 ? "中性" :
-    totalScore >= -25 ? "偏冷" : "极度恶劣";
+    totalScore >= 25 ? "极度乐观" :
+    totalScore >= 5 ? "偏暖" :
+    totalScore >= -5 ? "中性" :
+    totalScore >= -20 ? "偏冷" : "极度恶劣";
 
   const windEvents: string[] = [
     ...breadthDetails,
@@ -755,17 +755,18 @@ export function computeEarlyBirdScore(
   const riskWarnings: string[] = [];
   let catalyst = "";
 
-  // ======= 1. 超短线得分（基于质量分 + 涨停状态） =======
-  if (input.scalpQualityGrade === "极优板") { scalpScore += 30; confidenceFactors.push("极优板质量"); }
-  else if (input.scalpQualityGrade === "中等质量板") { scalpScore += 22; }
-  else if (input.scalpQualityGrade === "低质量板") { scalpScore += 10; }
-  else { scalpScore += Math.min(30, Math.round((input.scalpQualityScore || 0) / 3)); }
+  // ======= 1. 超短线得分（基于质量分 + 涨势） =======
+  if (input.scalpQualityGrade === "极优板") { scalpScore += 35; confidenceFactors.push("极优板质量"); }
+  else if (input.scalpQualityGrade === "中等质量板") { scalpScore += 28; }
+  else if (input.scalpQualityGrade === "低质量板") { scalpScore += 15; }
+  else { scalpScore += Math.min(35, Math.round((input.scalpQualityScore || 0) / 2.5)); }
 
-  // 涨停票加分
-  if (input.limitUpToday) { scalpScore += 15; catalyst = "今日涨停封板"; }
-  else if (input.changePercent >= 8) { scalpScore += 10; catalyst = `涨${input.changePercent.toFixed(1)}%逼近涨停`; }
-  else if (input.changePercent >= 5) { scalpScore += 6; catalyst = `涨${input.changePercent.toFixed(1)}%启动加速`; }
-  else { scalpScore += 3; catalyst = `涨${input.changePercent.toFixed(1)}%早期启动`; }
+  // 涨势加分（不再只有涨停才给高分）
+  if (input.limitUpToday) { scalpScore += 15; catalyst = "今日涨停封板"; confidenceFactors.push("涨停封板"); }
+  else if (input.changePercent >= 8) { scalpScore += 12; catalyst = `涨${input.changePercent.toFixed(1)}%逼近涨停`; }
+  else if (input.changePercent >= 5) { scalpScore += 10; catalyst = `涨${input.changePercent.toFixed(1)}%启动加速`; }
+  else if (input.changePercent >= 3) { scalpScore += 7; catalyst = `涨${input.changePercent.toFixed(1)}%早期启动`; }
+  else { scalpScore += 4; catalyst = `涨${input.changePercent.toFixed(1)}%`; }
 
   // 竞价强势加分（高开不破 → 主力信心足）
   if (input.openPct != null && input.openPct >= 2 && input.changePercent >= input.openPct) {
@@ -780,23 +781,23 @@ export function computeEarlyBirdScore(
       else if (f.includes("⚠️")) { scalpScore -= 10; riskWarnings.push(f); }
     }
   }
-  scalpScore = clamp(scalpScore, 0, 45);
+  scalpScore = clamp(scalpScore, 0, 50);
 
-  // ======= 2. 市场环境得分 =======
+  // ======= 2. 市场环境得分（中性不扣分，只有真正差才扣） =======
   let sentimentScore = 0;
   if (wind.score >= 30) { sentimentScore += 15; confidenceFactors.push("市场极度乐观"); }
   else if (wind.score >= 10) { sentimentScore += 10; confidenceFactors.push("市场偏暖"); }
-  else if (wind.score >= -10) { sentimentScore += 5; }
-  else if (wind.score >= -25) { sentimentScore -= 5; riskWarnings.push("市场偏冷"); }
-  else { sentimentScore -= 15; riskWarnings.push("市场极度恶劣，不宜操作"); }
+  else if (wind.score >= -5) { sentimentScore += 5; }
+  else if (wind.score >= -20) { /* 中性偏冷不扣分，让其他维度说话 */ }
+  else { sentimentScore -= 10; riskWarnings.push("市场极度恶劣，注意仓位"); }
 
   // 短线氛围特殊加分：风偏高的环境给更多分
   if (wind.breadth.score >= 25) { sentimentScore += 5; confidenceFactors.push("涨停潮环境"); }
   if (wind.capitalFlow.score >= 20) { sentimentScore += 8; confidenceFactors.push("资金大幅流入"); }
-  sentimentScore = clamp(sentimentScore, -15, 25);
+  sentimentScore = clamp(sentimentScore, -10, 25);
 
   // ======= 3. 事件催化得分 =======
-  let eventScore = 0;
+  let eventScore = 3; // 基础分：有事件分析本身就是正面信号
   // 板块事件热度
   if (input.sector && company.eventExposure.sectorSentiment >= 40) {
     eventScore += 15;
@@ -804,14 +805,16 @@ export function computeEarlyBirdScore(
     confidenceFactors.push(`板块${input.sector}受事件强力催化`);
   } else if (input.sector && company.eventExposure.sectorSentiment >= 20) {
     eventScore += 10;
+  } else if (input.sector && company.eventExposure.sectorSentiment >= 5) {
+    eventScore += 5;
   } else if (input.sector && company.eventExposure.sectorSentiment <= -20) {
-    eventScore -= 10; riskWarnings.push(`板块${input.sector}遭遇利空`);
+    eventScore -= 8; riskWarnings.push(`板块${input.sector}遭遇利空`);
   }
   // 事件聚集度
   if (heatMap.eventClusterScore >= 60) { eventScore += 8; confidenceFactors.push("事件聚集效应显著"); }
-  else if (heatMap.eventClusterScore <= 30) { eventScore -= 3; }
+  else if (heatMap.eventClusterScore >= 30) { eventScore += 3; }
 
-  eventScore = clamp(eventScore, -10, 25);
+  eventScore = clamp(eventScore, -8, 25);
 
   // ======= 4. 公司基本面/风控得分 =======
   let companyScore = 0;
@@ -838,10 +841,10 @@ export function computeEarlyBirdScore(
   ));
 
   const level: EarlyBirdSignal["level"] =
-    totalScore >= 70 ? "强烈推荐" :
-    totalScore >= 55 ? "推荐" :
-    totalScore >= 40 ? "关注" :
-    totalScore >= 20 ? "观望" : "回避";
+    totalScore >= 60 ? "强烈推荐" :
+    totalScore >= 45 ? "推荐" :
+    totalScore >= 30 ? "关注" :
+    totalScore >= 15 ? "观望" : "回避";
 
   // 建议入场窗口
   let entryWindow = "盘中10:00-11:00";

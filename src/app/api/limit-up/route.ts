@@ -297,33 +297,45 @@ export async function POST() {
       notifyNextDayWatchlist(watchlist);
     }
 
-    // === 情绪+事件+公司综合早鸟分析（取Top15候选） ===
+    // === 情绪+事件+公司综合早鸟分析（失败不阻塞，降级为基础评分） ===
     let earlyBirds: EarlyBirdSignal[] = [];
     let sentimentSummary = "";
     try {
       const topPicks = watchlist.picks.slice(0, 15);
-      const sentimentReport = await runFullSentimentAnalysis(
-        topPicks.map(p => ({
-          code: p.code,
-          name: p.name,
-          scalpQualityScore: p.qualityScore ?? p.score,
-          scalpQualityGrade: p.qualityGrade ?? (p.score >= 70 ? "极优板" : p.score >= 55 ? "中等质量板" : "低质量板"),
-          limitUpToday: p.limitUpToday,
-          changePercent: p.todayChangePercent,
-          turnoverRate: p.todayTurnoverRate,
-          amount: p.todayAmount,
-          marketCap: undefined as number | undefined,
-          pe: undefined as number | undefined,
-          sector: p.sectors?.[0],
-          sectorChangePercent: undefined as number | undefined,
-          consecutiveLimitUp: p.consecutiveUp || undefined,
-          qualityRiskFlags: p.qualityRiskFlags,
-        })),
-      );
-      earlyBirds = sentimentReport.earlyBirds;
-      sentimentSummary = sentimentReport.summary;
+      if (topPicks.length > 0) {
+        const sentimentReport = await runFullSentimentAnalysis(
+          topPicks.map(p => ({
+            code: p.code, name: p.name,
+            scalpQualityScore: p.qualityScore ?? p.score,
+            scalpQualityGrade: p.qualityGrade ?? (p.score >= 70 ? "极优板" : p.score >= 55 ? "中等质量板" : "低质量板"),
+            limitUpToday: p.limitUpToday,
+            changePercent: p.todayChangePercent,
+            turnoverRate: p.todayTurnoverRate,
+            amount: p.todayAmount,
+            marketCap: undefined as number | undefined,
+            pe: undefined as number | undefined,
+            sector: p.sectors?.[0],
+            qualityRiskFlags: p.qualityRiskFlags,
+          })),
+        );
+        earlyBirds = sentimentReport.earlyBirds;
+        sentimentSummary = sentimentReport.summary;
+      }
     } catch (e) {
-      console.error("Sentiment analysis error:", e);
+      console.error("Sentiment analysis error, using fallback:", e);
+      // 降级：直接用 watchlist 分数生成基础推荐
+      earlyBirds = watchlist.picks.slice(0, 10).map(p => ({
+        code: p.code, name: p.name,
+        totalScore: p.score,
+        level: p.score >= 70 ? "强烈推荐" : p.score >= 55 ? "推荐" : p.score >= 40 ? "关注" : "观望",
+        scalpScore: p.score, sentimentScore: 0, eventScore: 0, companyScore: 0,
+        catalyst: p.reasons.slice(0, 2).join("，"),
+        riskWarnings: p.qualityRiskFlags || [],
+        entryWindow: "盘中关注",
+        confidenceFactors: p.reasons.slice(0, 3),
+        detectedAt: new Date().toISOString(),
+      } as EarlyBirdSignal));
+      sentimentSummary = "情绪分析暂不可用，显示基础评分";
     }
 
     return NextResponse.json({

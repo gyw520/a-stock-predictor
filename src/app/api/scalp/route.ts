@@ -141,11 +141,11 @@ export async function PUT() {
       const wind = await assessMarketWind();
       windScore = wind.score;
       windLabel = wind.label;
-      // 极度恶劣时，在 reasoning 里加警告
+      // 只有极度恶劣才限制买入，其他情况交给情绪周期判断
       if (wind.label === "极度恶劣") {
         scalpConfig.trade.positionScale = {
           ...scalpConfig.trade.positionScale,
-          icePoint: 0, warm: 0.2, highTide: 0.1, divergence: 0,
+          icePoint: 0.15, warm: 0.25, highTide: 0.2, divergence: 0.1,
         };
       }
     } catch { /* 风向获取失败不影响主流程 */ }
